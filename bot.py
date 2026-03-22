@@ -71,9 +71,9 @@ def verified_text():
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
-        "✅ <b>82 BET OFFICIAL LINK</b> 🔗\n"
+        "✅ <b>Tiranga OFFICIAL LINK</b> 🔗\n"
         "\n"
-        f"👉 <a href='{REG_LINK}'>🎰 Register Now — 82 BET</a>\n"
+        f"👉 <a href='{REG_LINK}'>🎰 Register Now — Tiranga</a>\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
@@ -101,7 +101,7 @@ WITHDRAW_TEXT = (
     "\n"
     "✅ To withdraw your money:\n"
     "\n"
-    "1️⃣ Register on 82 BET using the link\n"
+    "1️⃣ Register on Tiranga using the link\n"
     "2️⃣ Complete your profile\n"
     "3️⃣ Claim your giftcode reward\n"
     "4️⃣ Withdraw to your UPI 💸\n"
@@ -133,7 +133,6 @@ def get_retry_keyboard():
 
 def get_verified_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎰 Register — 82 BET", url=REG_LINK)],
         [InlineKeyboardButton("💸 Withdraw Money", callback_data="withdraw_money")],
     ])
 
