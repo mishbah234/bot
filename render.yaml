@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: telegram-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID_1
+        value: "-1002169640991"
+      - key: CHANNEL_ID_2
+        value: "-1002111582843"
+      - key: CHANNEL_URL_1
+        value: "https://t.me/+Yr_j3b9zwnRiMjNl"
+      - key: CHANNEL_URL_2
+        value: "https://t.me/+uGeLDa05s7M4NjFl"
+      - key: REG_LINK
+        value: "https://www.tgdream16.com/#/register?invitationCode=632738378641"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
