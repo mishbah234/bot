@@ -219,26 +219,24 @@ def record_withdrawal(user_id: str, amount: float) -> None:
 # ──────────────────────────────────────────────
 def welcome_text():
     return (
-        "💰 <b>Claim Your Free UPI Cash!</b> 💰\n"
+        "🎉 <b>Welcome to TG Dream!</b> 🎉\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
-        "🎉 <b>Welcome!</b> You're just 2 steps away\n"
-        "from claiming your reward!\n"
+        "💰 Earn money by joining & referring!\n"
         "\n"
-        "📌 <b>Step 1:</b> Join <b>BOTH</b> channels below 👇\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        f"👉 <a href='{CHANNEL_URLS[0]}'>🌟 Join Channel 1</a>\n"
-        "\n"
-        f"👉 <a href='{CHANNEL_URLS[1]}'>🌟 Join Channel 2</a>\n"
+        "📌 <b>Quick Start:</b>\n"
+        "1️⃣  Join both channels (links below)\n"
+        "2️⃣  Get ₹2 joining bonus instantly\n"
+        "3️⃣  Invite friends & earn ₹3 per person\n"
+        "4️⃣  Withdraw when you reach ₹30\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
-        "📌 <b>Step 2:</b> After joining <b>both</b> channels,\n"
-        "tap the ✅ button below to verify!\n"
-    )
+        "🔗 <a href='{channel1}'>Join Channel 1</a>  •  <a href='{channel2}'>Join Channel 2</a>\n"
+        "\n"
+        "Once joined, tap \"✅ Verify\" below 👇\n"
+    ).format(channel1=CHANNEL_URLS[0], channel2=CHANNEL_URLS[1])
 
 
 def verified_text():
@@ -298,25 +296,25 @@ WITHDRAW_TEXT = (
 # ──────────────────────────────────────────────
 def get_welcome_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("🌟 Join Channel 1")],
-        [KeyboardButton("🌟 Join Channel 2")],
         [KeyboardButton("✅ Verify Both Channels")],
+        [KeyboardButton("💰 Check Balance")],
+        [KeyboardButton("📞 Need Help?")],
     ], resize_keyboard=True)
 
 
 def get_retry_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("🌟 Join Channel 1")],
-        [KeyboardButton("🌟 Join Channel 2")],
         [KeyboardButton("✅ Try Verifying Again")],
+        [KeyboardButton("💰 Check Balance")],
+        [KeyboardButton("📞 Help")],
     ], resize_keyboard=True)
 
 
 def get_verified_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("💸 Withdraw Money")],
-        [KeyboardButton("💰 Check Balance")],
-        [KeyboardButton("🔗 Get Referral Link")],
+        [KeyboardButton("� Balance"), KeyboardButton("🔗 Referral Link")],
+        [KeyboardButton("💸 Withdraw"), KeyboardButton("👥 My Referrals")],
+        [KeyboardButton("⚙️ Settings"), KeyboardButton("📞 Help")],
     ], resize_keyboard=True)
 
 
@@ -341,9 +339,39 @@ async def check_membership(bot, user_id):
 #  HANDLERS
 # ──────────────────────────────────────────────
 async def start(update: Update, context):
-    # Track user with details
+    """Start command - handles referrals and welcome."""
+    user_id = update.effective_user.id
     save_user(update.effective_user)
-
+    
+    # Check if this user was referred
+    if context.args:
+        ref_code = context.args[0]
+        if ref_code.startswith("ref_"):
+            try:
+                referrer_id = ref_code.split("_")[1]
+                # Add referral bonus only if not already referred
+                user_balance = get_user_balance(user_id)
+                if referrer_id not in user_balance.get("referrals", []):
+                    add_referral(referrer_id, user_id)
+                    # Get joining bonus
+                    data = load_balance_data()
+                    joining_bonus = data["config"]["joining_bonus"]
+                    add_balance(str(user_id), joining_bonus, "joining_bonus")
+                    
+                    await update.message.reply_text(
+                        f"🎉 <b>Welcome!</b>\n\n"
+                        f"You were referred by a friend!\n"
+                        f"💵 <b>₹{joining_bonus} bonus added!</b>\n"
+                        f"(Your friend also earned ₹3)\n\n"
+                        "Now verify to continue →",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_welcome_keyboard(),
+                        disable_web_page_preview=True,
+                    )
+                    return
+            except:
+                pass
+    
     await update.message.reply_text(
         welcome_text(),
         parse_mode=ParseMode.HTML,
@@ -903,28 +931,31 @@ async def referral_command(update: Update, context):
     referral_bonus = data["config"]["referral_bonus"]
     joining_bonus = data["config"]["joining_bonus"]
     
-    # Generate a simple referral code (can be message link to bot with ref param)
-    referral_link = f"https://t.me/bot?start=ref_{user_id}"
+    # Get bot username
+    bot_username = context.bot.username or "bot"
+    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     
     text = (
         "🔗 <b>Your Referral Link</b>\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Share your link to earn!\n"
+        f"📊 Earning Details:\n"
+        f"• Joining Bonus: ₹{joining_bonus}\n"
+        f"• Per Referral: ₹{referral_bonus}\n"
         "\n"
-        f"💰 Joining Bonus: ₹{joining_bonus}\n"
-        f"👥 Referral Bonus: ₹{referral_bonus}/person\n"
+        "Your Link:\n"
+        f"<code>https://t.me/{bot_username}?start=ref_{user_id}</code>\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ Total Referrals: <b>{len(referrals)}</b>\n"
-        f"💵 Earned: <b>₹{len(referrals) * referral_bonus}</b>\n"
+        f"👥 Total Referrals: <b>{len(referrals)}</b>\n"
+        f"💵 Total Earned: <b>₹{len(referrals) * referral_bonus}</b>\n"
         "\n"
-        f"📋 IDs: <code>{', '.join(referrals[:5]) if referrals else 'None'}</code>\n"
+        "🎯 Share with friends & earn!\n"
     )
     
     keyboard = ReplyKeyboardMarkup([
+        [KeyboardButton("👥 My Referrals")],
         [KeyboardButton("💰 Check Balance")],
-        [KeyboardButton("🔗 Refresh Link")],
         [KeyboardButton("◀️ Back")],
     ], resize_keyboard=True)
     
@@ -1013,6 +1044,110 @@ async def withdrawal_amount(update: Update, context):
         await update.message.reply_text("❌ Invalid amount. Send a number (e.g., 30)")
 
 
+async def my_referrals_command(update: Update, context):
+    """Show list of user's referrals."""
+    user_id = update.effective_user.id
+    user_balance = get_user_balance(user_id)
+    referrals = user_balance.get("referrals", [])
+    
+    if not referrals:
+        await update.message.reply_text(
+            "👥 <b>My Referrals</b>\n\n"
+            "You don't have any referrals yet.\n"
+            "Start sharing your link to earn! 🔗",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("🔗 Share Referral Link")],
+                [KeyboardButton("◀️ Back")],
+            ], resize_keyboard=True),
+        )
+        return
+    
+    data = load_balance_data()
+    referral_bonus = data["config"]["referral_bonus"]
+    
+    lines = [f"👥 <b>My Referrals ({len(referrals)})</b>\n"]
+    for i, ref_id in enumerate(referrals, 1):
+        lines.append(f"{i}. ID: <code>{ref_id}</code>")
+    
+    lines.append(f"\n💵 Total Earned: <b>₹{len(referrals) * referral_bonus}</b>")
+    
+    text = "\n".join(lines)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("🔗 Referral Link")],
+            [KeyboardButton("◀️ Back")],
+        ], resize_keyboard=True),
+    )
+
+
+async def settings_command(update: Update, context):
+    """Show user settings."""
+    user_id = update.effective_user.id
+    user_data = load_users().get(str(user_id), {})
+    
+    text = (
+        "⚙️ <b>Settings</b>\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+        f"📝 <b>Name:</b> {user_data.get('name', 'Unknown')}\n"
+        f"📅 <b>Joined:</b> {user_data.get('joined', 'N/A')}\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        "✅ Language: English\n"
+        "🔔 Notifications: On\n"
+        "🔒 Account: Verified ✓\n"
+    )
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("📞 Need Help?")],
+            [KeyboardButton("◀️ Back")],
+        ], resize_keyboard=True),
+    )
+
+
+async def help_command(update: Update, context):
+    """Show help/FAQ."""
+    text = (
+        "📞 <b>Help & FAQ</b>\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        "<b>❓ How to earn?</b>\n"
+        "✅ Join both channels\n"
+        "✅ Get ₹2 bonus instantly\n"
+        "✅ Share your referral link\n"
+        "✅ Earn ₹3 per referral\n"
+        "\n"
+        "<b>💸 How to withdraw?</b>\n"
+        "• Minimum: ₹30\n"
+        "• Max per day: 1 withdrawal\n"
+        "• Time: 24 hours\n"
+        "\n"
+        "<b>❓ Need more help?</b>\n"
+        "Contact: @support\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("💰 Check Balance")],
+            [KeyboardButton("🔗 Referral Link")],
+            [KeyboardButton("◀️ Back")],
+        ], resize_keyboard=True),
+    )
+
+
 async def handle_button_press(update: Update, context):
     """Handle keyboard button presses."""
     text = update.message.text
@@ -1023,17 +1158,29 @@ async def handle_button_press(update: Update, context):
         await verify_callback(update, context)
         return
     
-    # User balance buttons
-    if text == "💰 Check Balance":
+    # User balance/wallet buttons
+    if text == "💰 Balance" or text == "💰 Check Balance":
         await balance_command(update, context)
         return
     
-    if text == "🔗 Get Referral Link" or text == "🔗 Refresh Link":
+    if text in ["🔗 Referral Link", "🔗 Share Link", "🔗 Share Referral Link"]:
         await referral_command(update, context)
         return
     
-    if text == "💸 Withdraw Money":
+    if text == "👥 My Referrals":
+        await my_referrals_command(update, context)
+        return
+    
+    if text in ["💸 Withdraw", "💸 Withdraw Money"]:
         await withdraw_command(update, context)
+        return
+    
+    if text in ["⚙️ Settings", "Settings"]:
+        await settings_command(update, context)
+        return
+    
+    if text in ["📞 Help", "📞 Need Help?"]:
+        await help_command(update, context)
         return
     
     # Admin buttons
@@ -1054,7 +1201,7 @@ async def handle_button_press(update: Update, context):
         )
         return
     
-    if text == "👥 All Users":
+    if text in ["👥 All Users", "👥 Users"]:
         users = load_users()
         if not users:
             await update.message.reply_text("❌ No users yet.", reply_markup=get_back_keyboard())
