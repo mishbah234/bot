@@ -1,0 +1,9 @@
+{
+  "config": {
+    "joining_bonus": 2,
+    "referral_bonus": 3,
+    "min_withdrawal": 30,
+    "max_daily_withdrawals": 1
+  },
+  "users": {}
+}

@@ -43,6 +43,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 USERS_FILE = "users.json"
+BALANCE_FILE = "balance.json"
 WAITING_BROADCAST = 1  # ConversationHandler state
 
 
@@ -100,6 +101,117 @@ def save_user(user):
         users[uid]["username"] = user.username
         with open(USERS_FILE, "w") as f:
             json.dump(users, f, indent=2)
+
+
+# ──────────────────────────────────────────────
+#  BALANCE & REFERRAL SYSTEM
+# ──────────────────────────────────────────────
+def load_balance_data() -> dict:
+    """Load balance and referral data."""
+    try:
+        with open(BALANCE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            "config": {"joining_bonus": 2, "referral_bonus": 3, "min_withdrawal": 30, "max_daily_withdrawals": 1},
+            "users": {}
+        }
+
+
+def save_balance_data(data: dict) -> None:
+    """Save balance and referral data."""
+    with open(BALANCE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def get_user_balance(user_id: str) -> dict:
+    """Get user's balance data."""
+    data = load_balance_data()
+    uid = str(user_id)
+    if uid not in data["users"]:
+        data["users"][uid] = {
+            "balance": 0,
+            "referrals": [],
+            "withdrawals": [],
+            "last_withdrawal": None
+        }
+        save_balance_data(data)
+    return data["users"][uid]
+
+
+def add_balance(user_id: str, amount: float, reason: str = "bonus") -> None:
+    """Add balance to user."""
+    data = load_balance_data()
+    uid = str(user_id)
+    if uid not in data["users"]:
+        data["users"][uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+    data["users"][uid]["balance"] = data["users"][uid].get("balance", 0) + amount
+    logger.info(f"Added ₹{amount} to user {uid} ({reason})")
+    save_balance_data(data)
+
+
+def subtract_balance(user_id: str, amount: float) -> bool:
+    """Subtract balance (for withdrawals). Returns True if successful."""
+    data = load_balance_data()
+    uid = str(user_id)
+    if uid not in data["users"]:
+        return False
+    if data["users"][uid].get("balance", 0) >= amount:
+        data["users"][uid]["balance"] -= amount
+        save_balance_data(data)
+        return True
+    return False
+
+
+def add_referral(referrer_id: str, referred_id: str) -> None:
+    """Add referral relationship."""
+    data = load_balance_data()
+    referrer_uid = str(referrer_id)
+    referred_uid = str(referred_id)
+    
+    if referrer_uid not in data["users"]:
+        data["users"][referrer_uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+    
+    if referred_uid not in data["users"][referrer_uid]["referrals"]:
+        data["users"][referrer_uid]["referrals"].append(referred_uid)
+        # Add referral bonus
+        bonus = data["config"]["referral_bonus"]
+        data["users"][referrer_uid]["balance"] = data["users"][referrer_uid].get("balance", 0) + bonus
+        logger.info(f"Referral registered: {referrer_uid} → {referred_uid}, bonus ₹{bonus}")
+        save_balance_data(data)
+
+
+def can_withdraw(user_id: str) -> bool:
+    """Check if user can withdraw today."""
+    data = load_balance_data()
+    uid = str(user_id)
+    user_data = data["users"].get(uid)
+    if not user_data:
+        return False
+    
+    last_withdraw = user_data.get("last_withdrawal")
+    if not last_withdraw:
+        return True
+    
+    try:
+        last_date = datetime.strptime(last_withdraw, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        return last_date < today
+    except:
+        return True
+
+
+def record_withdrawal(user_id: str, amount: float) -> None:
+    """Record withdrawal transaction."""
+    data = load_balance_data()
+    uid = str(user_id)
+    if uid in data["users"]:
+        data["users"][uid]["withdrawals"].append({
+            "amount": amount,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M")
+        })
+        data["users"][uid]["last_withdrawal"] = datetime.now().strftime("%Y-%m-%d")
+        save_balance_data(data)
 
 
 # ──────────────────────────────────────────────
@@ -243,9 +355,17 @@ async def verify_callback(update: Update, context):
     await query.answer()
 
     is_member = await check_membership(context.bot, query.from_user.id)
+    user_id = query.from_user.id
 
     try:
         if is_member:
+            # Add joining bonus on first verification
+            user_balance = get_user_balance(user_id)
+            if len(user_balance["withdrawals"]) == 0 and user_balance["balance"] == 0:
+                data = load_balance_data()
+                joining_bonus = data["config"]["joining_bonus"]
+                add_balance(str(user_id), joining_bonus, "joining_bonus")
+            
             await query.edit_message_text(
                 verified_text(),
                 parse_mode=ParseMode.HTML,
@@ -294,7 +414,9 @@ def get_admin_keyboard():
          InlineKeyboardButton("� Analytics", callback_data="admin_analytics")],
         [InlineKeyboardButton("👥 Users", callback_data="admin_users"),
          InlineKeyboardButton("🔍 Check Channels", callback_data="admin_checkbot")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+        [InlineKeyboardButton("� Balance Config", callback_data="admin_balance_config"),
+         InlineKeyboardButton("💵 Top Balances", callback_data="admin_top_balances")],
+        [InlineKeyboardButton("�📢 Broadcast", callback_data="admin_broadcast"),
          InlineKeyboardButton("💾 Export Users", callback_data="admin_export")],
         [InlineKeyboardButton("🗑️ Purge Users", callback_data="admin_purge"),
          InlineKeyboardButton("⚠️ Delete All", callback_data="admin_delete_confirm")],
@@ -584,6 +706,49 @@ async def admin_panel_callback(update: Update, context):
             reply_markup=get_back_keyboard(),
         )
 
+    elif action == "admin_balance_config":
+        data = load_balance_data()
+        config = data["config"]
+        await query.edit_message_text(
+            f"⚙️ <b>Balance Configuration</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Joining Bonus: ₹<b>{config['joining_bonus']}</b>\n"
+            f"👥 Referral Bonus: ₹<b>{config['referral_bonus']}</b>\n"
+            f"🏦 Min Withdrawal: ₹<b>{config['min_withdrawal']}</b>\n"
+            f"📅 Max Daily Withdrawals: <b>{config['max_daily_withdrawals']}</b>\n"
+            f"\n"
+            f"(To edit these values, modify balance.json)",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+    elif action == "admin_top_balances":
+        data = load_balance_data()
+        users_data = data["users"]
+        
+        if not users_data:
+            await query.answer("No balance data yet.", show_alert=True)
+            return
+        
+        # Sort by balance
+        sorted_users = sorted(users_data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)[:10]
+        
+        lines = ["💰 <b>Top 10 Balances</b>\n"]
+        total_distributed = 0
+        for i, (uid, user_data) in enumerate(sorted_users, 1):
+            balance = user_data.get("balance", 0)
+            referrals = len(user_data.get("referrals", []))
+            lines.append(f"{i}. ID: <code>{uid}</code> | Balance: ₹<b>{balance}</b> | Refs: {referrals}")
+            total_distributed += balance
+        
+        lines.append(f"\n💵 Total Distributed: <b>₹{total_distributed}</b>")
+        
+        await query.edit_message_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
 
 async def stats_command(update: Update, context):
     """Show bot statistics (admin only)."""
@@ -704,6 +869,152 @@ async def cancel_broadcast(update: Update, context):
 
 
 # ──────────────────────────────────────────────
+#  BALANCE COMMANDS
+# ──────────────────────────────────────────────
+async def balance_command(update: Update, context):
+    """Show user's balance and referral info."""
+    user_id = update.effective_user.id
+    user_balance = get_user_balance(user_id)
+    
+    balance = user_balance.get("balance", 0)
+    referrals = user_balance.get("referrals", [])
+    
+    text = (
+        "💰 <b>Your Wallet</b>\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 Balance: <b>₹{balance}</b>\n"
+        f"👥 Referrals: <b>{len(referrals)}</b>\n"
+        f"📊 Earnings: <b>₹{len(referrals) * 3}</b> (from referrals)\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 Min Withdraw: ₹30\n"
+        f"📅 Max/Day: 1 withdrawal\n"
+    )
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def referral_command(update: Update, context):
+    """Show referral link and info."""
+    user_id = update.effective_user.id
+    user_balance = get_user_balance(user_id)
+    referrals = user_balance.get("referrals", [])
+    
+    data = load_balance_data()
+    referral_bonus = data["config"]["referral_bonus"]
+    joining_bonus = data["config"]["joining_bonus"]
+    
+    # Generate a simple referral code (can be message link to bot with ref param)
+    referral_link = f"https://t.me/bot?start=ref_{user_id}"
+    
+    text = (
+        "🔗 <b>Your Referral Link</b>\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Share your link to earn!\n"
+        "\n"
+        f"💰 Joining Bonus: ₹{joining_bonus}\n"
+        f"👥 Referral Bonus: ₹{referral_bonus}/person\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Total Referrals: <b>{len(referrals)}</b>\n"
+        f"💵 Earned: <b>₹{len(referrals) * referral_bonus}</b>\n"
+        "\n"
+        f"📋 IDs: <code>{', '.join(referrals[:5]) if referrals else 'None'}</code>\n"
+    )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Copy Link", url=referral_link)],
+        [InlineKeyboardButton("💰 View Balance", callback_data="view_balance")],
+    ])
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+
+async def withdraw_command(update: Update, context):
+    """Start withdrawal process."""
+    user_id = update.effective_user.id
+    user_balance = get_user_balance(user_id)
+    balance = user_balance.get("balance", 0)
+    
+    data = load_balance_data()
+    min_withdraw = data["config"]["min_withdrawal"]
+    
+    if not can_withdraw(user_id):
+        await update.message.reply_text(
+            "❌ <b>Withdrawal Limit Reached</b>\n\n"
+            "You can only withdraw once per day.\n"
+            "Try again tomorrow.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    
+    if balance < min_withdraw:
+        await update.message.reply_text(
+            f"❌ <b>Insufficient Balance</b>\n\n"
+            f"Your Balance: ₹{balance}\n"
+            f"Minimum Required: ₹{min_withdraw}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    
+    text = (
+        "💳 <b>Withdraw Money</b>\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 Available: <b>₹{balance}</b>\n"
+        f"💰 Min Amount: ₹{min_withdraw}\n"
+        "\n"
+        "Send the amount you want to withdraw (e.g., 30)\n"
+        "Send /cancel to abort.\n"
+    )
+    
+    context.user_data["withdrawing"] = True
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def withdrawal_amount(update: Update, context):
+    """Process withdrawal amount."""
+    if not context.user_data.get("withdrawing"):
+        return
+    
+    try:
+        user_id = update.effective_user.id
+        amount = float(update.message.text)
+        
+        data = load_balance_data()
+        min_withdraw = data["config"]["min_withdrawal"]
+        
+        if amount < min_withdraw:
+            await update.message.reply_text(f"❌ Minimum amount is ₹{min_withdraw}")
+            return
+        
+        user_balance = get_user_balance(user_id)
+        if user_balance.get("balance", 0) < amount:
+            await update.message.reply_text("❌ Insufficient balance!")
+            return
+        
+        # Process withdrawal
+        if subtract_balance(str(user_id), amount):
+            record_withdrawal(str(user_id), amount)
+            context.user_data["withdrawing"] = False
+            
+            await update.message.reply_text(
+                f"✅ <b>Withdrawal Successful!</b>\n\n"
+                f"Amount: <b>₹{amount}</b>\n"
+                f"Status: Pending\n\n"
+                f"You'll receive it in 24 hours.\n"
+                f"Admin will review and process.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_text("❌ Withdrawal failed. Try again.")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Send a number (e.g., 30)")
+
+
+# ──────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────
 def main():
@@ -732,6 +1043,19 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("checkbot", checkbot_command))
+    app.add_handler(CommandHandler("balance", balance_command))
+    app.add_handler(CommandHandler("referral", referral_command))
+    
+    # Withdrawal conversation handler
+    withdrawal_handler = ConversationHandler(
+        entry_points=[CommandHandler("withdraw", withdraw_command)],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdrawal_amount)]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: None)],
+    )
+    app.add_handler(withdrawal_handler)
+    
     app.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
     app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
