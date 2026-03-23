@@ -16,7 +16,7 @@ from telegram.constants import ParseMode
 TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
-# Comma-separated admin Telegram IDs, e.g. "123456,789012"
+# Comma-separated admin Telegram IDs
 ADMIN_IDS = [
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "8455891912,6097181868").split(",") if x.strip()
 ]
@@ -48,7 +48,7 @@ WAITING_BROADCAST = 1  # ConversationHandler state
 
 
 # ──────────────────────────────────────────────
-#  USER STORAGE
+#  USER STORAGE (with verified flag)
 # ──────────────────────────────────────────────
 def load_users() -> dict:
     """Load stored users from JSON file. Returns dict of user_id -> details."""
@@ -59,10 +59,14 @@ def load_users() -> dict:
         if isinstance(data, list):
             migrated = {}
             for uid in data:
-                migrated[str(uid)] = {"name": "Unknown", "username": None, "joined": None}
+                migrated[str(uid)] = {"name": "Unknown", "username": None, "joined": None, "verified": False}
             with open(USERS_FILE, "w") as f:
                 json.dump(migrated, f, indent=2)
             return migrated
+        # Ensure new users have the verified field
+        for uid, info in data.items():
+            if "verified" not in info:
+                info["verified"] = False
         return data
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -91,6 +95,7 @@ def save_user(user):
             "name": name,
             "username": username,
             "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "verified": False
         }
         with open(USERS_FILE, "w") as f:
             json.dump(users, f, indent=2)
@@ -101,6 +106,25 @@ def save_user(user):
         users[uid]["username"] = user.username
         with open(USERS_FILE, "w") as f:
             json.dump(users, f, indent=2)
+
+
+def set_verified(user_id: int) -> bool:
+    """Mark user as verified in the user database. Returns True if it was a new verification."""
+    users = load_users()
+    uid = str(user_id)
+    if uid in users:
+        if not users[uid].get("verified", False):
+            users[uid]["verified"] = True
+            with open(USERS_FILE, "w") as f:
+                json.dump(users, f, indent=2)
+            return True
+    return False
+
+
+def is_verified(user_id: int) -> bool:
+    """Check if user has already verified."""
+    users = load_users()
+    return users.get(str(user_id), {}).get("verified", False)
 
 
 # ──────────────────────────────────────────────
@@ -244,6 +268,7 @@ def verified_text():
         "✅ <b>Verification Successful!</b>\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎉 You've earned <b>₹{load_balance_data()['config']['joining_bonus']}</b> joining bonus!\n"
         "\n"
         "⚠️ <b>MUST REGISTER WITH OFFICIAL</b>\n"
         "<b>LINK FOR GIFTCODES ACCESS</b> ⚠️\n"
@@ -318,79 +343,56 @@ def get_verified_keyboard(user_id=None):
 
 
 def get_back_keyboard():
+    """Reply keyboard with a back button."""
     return ReplyKeyboardMarkup([
         [KeyboardButton("◀️ Back")],
     ], resize_keyboard=True)
 
 
-ADMIN_PANEL_TEXT = (
-    "⚙️ <b>Admin Panel</b>\n"
-    "\n"
-    "━━━━━━━━━━━━━━━━━━━━━━\n"
-    "\n"
-    "Choose an option below 👇\n"
-)
+def get_back_inline_keyboard():
+    """Inline keyboard with a back button (for admin panel)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Back", callback_data="admin_panel")]
+    ])
 
 
+def get_admin_keyboard():
+    """Inline keyboard for admin panel."""
+    buttons = [
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
+        [InlineKeyboardButton("👥 Users", callback_data="admin_users")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📈 Analytics", callback_data="admin_analytics")],
+        [InlineKeyboardButton("💾 Export Users", callback_data="admin_export")],
+        [InlineKeyboardButton("💰 Export Balance", callback_data="admin_export_balance")],
+        [InlineKeyboardButton("🗑️ Purge Inactive", callback_data="admin_purge")],
+        [InlineKeyboardButton("⚠️ Delete All", callback_data="admin_delete_confirm")],
+        [InlineKeyboardButton("⚙️ Balance Config", callback_data="admin_balance_config")],
+        [InlineKeyboardButton("💵 Top Balances", callback_data="admin_top_balances")],
+        [InlineKeyboardButton("🔍 Check Channels", callback_data="admin_checkbot")],
+    ]
+    return InlineKeyboardMarkup(buttons)
 
-async def start(update: Update, context):
-    """Start command - handles referrals and welcome."""
-    user_id = update.effective_user.id
-    save_user(update.effective_user)
-    
-    # Check if this user was referred
-    if context.args:
-        ref_code = context.args[0]
-        if ref_code.startswith("ref_"):
-            try:
-                referrer_id = ref_code.split("_")[1]
-                # Add referral bonus only if not already referred
-                user_balance = get_user_balance(user_id)
-                if referrer_id not in user_balance.get("referrals", []):
-                    add_referral(referrer_id, user_id)
-                    # Get joining bonus
-                    data = load_balance_data()
-                    joining_bonus = data["config"]["joining_bonus"]
-                    add_balance(str(user_id), joining_bonus, "joining_bonus")
-                    
-                    await update.message.reply_text(
-                        f"🎉 <b>Welcome!</b>\n\n"
-                        f"You were referred by a friend!\n"
-                        f"💵 <b>₹{joining_bonus} bonus added!</b>\n"
-                        f"(Your friend also earned ₹3)\n\n"
-                        "Now verify to continue →",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=get_welcome_keyboard(),
-                        disable_web_page_preview=True,
-                    )
-                    return
-            except:
-                pass
-    
-    await update.message.reply_text(
-        welcome_text(),
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_welcome_keyboard(),
-        disable_web_page_preview=True,
-    )
 
 def get_purge_keyboard():
     """Confirmation keyboard for purge operation."""
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("✅ Yes, Purge"), KeyboardButton("❌ Cancel")],
-    ], resize_keyboard=True)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Yes, Purge", callback_data="admin_purge_confirm")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]
+    ])
 
 
 def get_delete_all_keyboard():
     """Confirmation keyboard for delete all operation."""
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("⚠️ Yes Delete ALL"), KeyboardButton("❌ Cancel")],
-    ], resize_keyboard=True)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚠️ Yes Delete ALL", callback_data="admin_delete_all_confirm")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]
+    ])
 
 
 def get_analytics_summary() -> str:
     """Generate analytics summary."""
-    from datetime import datetime as dt, timedelta
+    from datetime import datetime as dt
     
     users = load_users()
     if not users:
@@ -419,23 +421,24 @@ def get_analytics_summary() -> str:
     
     # Count unknown users (haven't updated profile)
     unknown_count = sum(1 for info in users.values() if info.get("name") == "Unknown")
+    verified_count = sum(1 for info in users.values() if info.get("verified", False))
     
     # Build summary
     lines = [
         "📈 <b>Analytics</b>\n",
         "━━━━━━━━━━━━━━━━━━━━━━\n",
         f"👥 Total Users: <b>{len(users)}</b>",
+        f"✅ Verified: <b>{verified_count}</b>",
         f"🆕 Last 7 Days: <b>{last_7_days}</b>",
         f"📅 Last 30 Days: <b>{last_30_days}</b>",
         f"❓ Unknown Users: <b>{unknown_count}</b>",
-        f"✅ Registered: <b>{len(users) - unknown_count}</b>",
     ]
     
     return "\n".join(lines)
 
 
 def purge_inactive_users(days: int = 30) -> tuple:
-    """Remove users who joined more than 'days' ago and are still unknown.
+    """Remove users who joined more than 'days' ago and are still not verified.
     Returns (purged_count, remaining_count)"""
     from datetime import datetime as dt
     
@@ -451,8 +454,8 @@ def purge_inactive_users(days: int = 30) -> tuple:
                 joined_date = dt.strptime(joined_str, "%Y-%m-%d %H:%M").date()
                 days_old = (today - joined_date).days
                 
-                # Remove if: older than threshold AND still unknown (not verified)
-                if days_old >= days and info.get("name") == "Unknown":
+                # Remove if: older than threshold AND not verified
+                if days_old >= days and not info.get("verified", False):
                     to_remove.append(uid)
             except:
                 pass
@@ -475,19 +478,111 @@ def delete_all_users() -> None:
     logger.info("All users deleted!")
 
 
+# ──────────────────────────────────────────────
+#  VERIFICATION
+# ──────────────────────────────────────────────
+async def verify_callback(update: Update, context):
+    """Check if user has joined both channels, give bonus if new."""
+    user_id = update.effective_user.id
+    joined_all = True
+
+    for channel_id in CHANNEL_IDS:
+        try:
+            member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+            if member.status in ["left", "kicked"]:
+                joined_all = False
+                break
+        except Exception as e:
+            logger.error(f"Error checking channel {channel_id}: {e}")
+            # If the bot can't check, assume not joined to be safe
+            joined_all = False
+            break
+
+    if joined_all:
+        # Add joining bonus only if not already verified
+        if not is_verified(user_id):
+            data = load_balance_data()
+            joining_bonus = data["config"]["joining_bonus"]
+            add_balance(str(user_id), joining_bonus, "joining_bonus")
+            set_verified(user_id)
+            await update.message.reply_text(
+                verified_text(),
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_verified_keyboard(user_id),
+                disable_web_page_preview=True,
+            )
+        else:
+            # Already verified
+            await update.message.reply_text(
+                "✅ You are already verified!\n\n"
+                "Use the buttons below to check your balance, refer friends, etc.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_verified_keyboard(user_id),
+            )
+    else:
+        await update.message.reply_text(
+            not_joined_text(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_retry_keyboard(),
+            disable_web_page_preview=True,
+        )
+
+
+# ──────────────────────────────────────────────
+#  START COMMAND
+# ──────────────────────────────────────────────
+async def start(update: Update, context):
+    """Start command - handles referrals and welcome."""
+    user_id = update.effective_user.id
+    save_user(update.effective_user)
+    
+    # Check if this user was referred
+    if context.args:
+        ref_code = context.args[0]
+        if ref_code.startswith("ref_"):
+            try:
+                referrer_id = ref_code.split("_")[1]
+                # Add referral bonus only if not already referred
+                user_balance = get_user_balance(user_id)
+                if referrer_id not in user_balance.get("referrals", []):
+                    add_referral(referrer_id, user_id)
+                    await update.message.reply_text(
+                        f"🎉 <b>Welcome!</b>\n\n"
+                        f"You were referred by a friend!\n"
+                        f"Your friend earned ₹{load_balance_data()['config']['referral_bonus']}\n\n"
+                        "Now verify to get your joining bonus →",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_welcome_keyboard(),
+                        disable_web_page_preview=True,
+                    )
+                    return
+            except:
+                pass
+    
+    await update.message.reply_text(
+        welcome_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_welcome_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+# ──────────────────────────────────────────────
+#  ADMIN PANEL
+# ──────────────────────────────────────────────
 async def admin_command(update: Update, context):
     """Show admin panel (admin only)."""
     if update.effective_user.id not in ADMIN_IDS:
         return
     await update.message.reply_text(
-        ADMIN_PANEL_TEXT,
+        "⚙️ <b>Admin Panel</b>\n\nChoose an option below 👇",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_keyboard(),
     )
 
 
 async def admin_panel_callback(update: Update, context):
-    """Handle admin panel button clicks."""
+    """Handle admin panel callback queries."""
     query = update.callback_query
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔ Admin only!", show_alert=True)
@@ -498,7 +593,7 @@ async def admin_panel_callback(update: Update, context):
 
     if action == "admin_panel":
         await query.edit_message_text(
-            ADMIN_PANEL_TEXT,
+            "⚙️ <b>Admin Panel</b>\n\nChoose an option below 👇",
             parse_mode=ParseMode.HTML,
             reply_markup=get_admin_keyboard(),
         )
@@ -510,7 +605,7 @@ async def admin_panel_callback(update: Update, context):
             f"📊 <b>Bot Stats</b>\n\n"
             f"👥 Total users: <b>{len(users)}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_users":
@@ -518,7 +613,7 @@ async def admin_panel_callback(update: Update, context):
         if not users:
             await query.edit_message_text(
                 "❌ No users yet.",
-                reply_markup=get_back_keyboard(),
+                reply_markup=get_back_inline_keyboard(),
             )
             return
         lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
@@ -526,8 +621,9 @@ async def admin_panel_callback(update: Update, context):
             name = info.get("name", "Unknown")
             username = info.get("username")
             joined = info.get("joined", "N/A")
+            verified = "✅" if info.get("verified") else "❌"
             uname_str = f" @{username}" if username else ""
-            lines.append(f"{i}. <b>{name}</b>{uname_str}\n   ID: <code>{uid}</code> | Joined: {joined}")
+            lines.append(f"{i}. {verified} <b>{name}</b>{uname_str}\n   ID: <code>{uid}</code> | Joined: {joined}")
         text = "\n".join(lines)
         # Telegram message limit is 4096 chars
         if len(text) > 4000:
@@ -535,7 +631,7 @@ async def admin_panel_callback(update: Update, context):
         await query.edit_message_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_broadcast":
@@ -560,24 +656,25 @@ async def admin_panel_callback(update: Update, context):
         await query.edit_message_text(
             "\n".join(lines),
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_analytics":
         await query.edit_message_text(
             get_analytics_summary(),
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_export":
         users = load_users()
-        export_lines = ["user_id,name,username,joined"]
+        export_lines = ["user_id,name,username,joined,verified"]
         for uid, info in users.items():
             name = info.get("name", "Unknown").replace(",", ";")
             username = info.get("username") or ""
             joined = info.get("joined", "N/A")
-            export_lines.append(f"{uid},{name},{username},{joined}")
+            verified = "yes" if info.get("verified") else "no"
+            export_lines.append(f"{uid},{name},{username},{joined},{verified}")
         
         csv_content = "\n".join(export_lines)
         
@@ -599,12 +696,29 @@ async def admin_panel_callback(update: Update, context):
         except Exception as e:
             await query.answer(f"❌ Error: {e}", show_alert=True)
 
+    elif action == "admin_export_balance":
+        data = load_balance_data()
+        export_file = "balance_export.json"
+        with open(export_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        try:
+            with open(export_file, "rb") as f:
+                total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+                await context.bot.send_document(
+                    chat_id=query.from_user.id,
+                    document=f,
+                    caption=f"💰 Balance Export\n\nUsers: {len(data['users'])}\nTotal Balance: ₹{total_balance}"
+                )
+            await query.answer("📤 File sent to your DM!", show_alert=False)
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+
     elif action == "admin_purge":
         await query.edit_message_text(
             "🗑️ <b>Purge Inactive Users</b>\n\n"
             "This will delete users who:\n"
             "• Joined more than 30 days ago\n"
-            "• Haven't completed registration (still 'Unknown')\n\n"
+            "• Haven't verified their account\n\n"
             "Are you sure?",
             parse_mode=ParseMode.HTML,
             reply_markup=get_purge_keyboard(),
@@ -617,7 +731,7 @@ async def admin_panel_callback(update: Update, context):
             f"🗑️ Deleted: <b>{purged}</b> inactive users\n"
             f"👥 Remaining: <b>{remaining}</b> users",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
         logger.info(f"Purged {purged} inactive users. {remaining} remaining.")
 
@@ -637,7 +751,7 @@ async def admin_panel_callback(update: Update, context):
             "⚠️ <b>All users deleted!</b>\n\n"
             "The database is now empty.",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_balance_config":
@@ -653,7 +767,7 @@ async def admin_panel_callback(update: Update, context):
             f"\n"
             f"(To edit these values, modify balance.json)",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
 
     elif action == "admin_top_balances":
@@ -680,126 +794,8 @@ async def admin_panel_callback(update: Update, context):
         await query.edit_message_text(
             "\n".join(lines),
             parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_back_inline_keyboard(),
         )
-
-
-async def stats_command(update: Update, context):
-    """Show bot statistics (admin only)."""
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    users = load_users()
-    await update.message.reply_text(
-        f"📊 <b>Bot Stats</b>\n\n"
-        f"👥 Total users: <b>{len(users)}</b>",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-async def users_command(update: Update, context):
-    """Show all users with details (admin only)."""
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    users = load_users()
-    if not users:
-        await update.message.reply_text("❌ No users yet.")
-        return
-
-    lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
-    for i, (uid, info) in enumerate(users.items(), 1):
-        name = info.get("name", "Unknown")
-        username = info.get("username")
-        joined = info.get("joined", "N/A")
-        uname_str = f" @{username}" if username else ""
-        lines.append(f"{i}. <b>{name}</b>{uname_str}\n   ID: <code>{uid}</code> | Joined: {joined}")
-
-    # Telegram message limit is 4096 chars, split if needed
-    text = "\n".join(lines)
-    if len(text) <= 4096:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-    else:
-        # Send in chunks
-        chunk = []
-        chunk_len = 0
-        for line in lines:
-            if chunk_len + len(line) + 1 > 4000:
-                await update.message.reply_text("\n".join(chunk), parse_mode=ParseMode.HTML)
-                chunk = []
-                chunk_len = 0
-            chunk.append(line)
-            chunk_len += len(line) + 1
-        if chunk:
-            await update.message.reply_text("\n".join(chunk), parse_mode=ParseMode.HTML)
-
-
-async def checkbot_command(update: Update, context):
-    """Debug command to check if bot can access all channels (admin only)."""
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    lines = ["🔍 <b>Channel Access Check</b>\n"]
-    for i, chat_id in enumerate(CHANNEL_IDS, 1):
-        try:
-            chat = await context.bot.get_chat(chat_id)
-            lines.append(f"✅ Channel {i}: <b>{chat.title}</b> (ID: <code>{chat_id}</code>)")
-        except Exception as e:
-            lines.append(f"❌ Channel {i}: ID <code>{chat_id}</code> — <b>{e}</b>")
-    lines.append(f"\n📋 Configured IDs: <code>{CHANNEL_IDS}</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
-
-
-async def broadcast_command(update: Update, context):
-    """Start broadcast flow (admin only)."""
-    if update.effective_user.id not in ADMIN_IDS:
-        return ConversationHandler.END
-    await update.message.reply_text(
-        "📢 <b>Broadcast Mode</b>\n\n"
-        "Send me the message you want to broadcast to all users.\n"
-        "Send /cancel to abort.",
-        parse_mode=ParseMode.HTML,
-    )
-    return WAITING_BROADCAST
-
-
-async def broadcast_message(update: Update, context):
-    """Receive the message and send it to all users."""
-    users = load_user_ids()
-    if not users:
-        await update.message.reply_text("❌ No users in the database yet.")
-        return ConversationHandler.END
-
-    sent, failed = 0, 0
-    status_msg = await update.message.reply_text(
-        f"📤 Broadcasting to <b>{len(users)}</b> users...",
-        parse_mode=ParseMode.HTML,
-    )
-
-    for user_id in users:
-        try:
-            await context.bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-            )
-            sent += 1
-        except Exception as e:
-            logger.warning(f"Failed to send to {user_id}: {e}")
-            failed += 1
-        # Small delay to avoid hitting Telegram rate limits
-        await asyncio.sleep(0.05)
-
-    await status_msg.edit_text(
-        f"✅ <b>Broadcast Complete!</b>\n\n"
-        f"📨 Sent: <b>{sent}</b>\n"
-        f"❌ Failed: <b>{failed}</b>",
-        parse_mode=ParseMode.HTML,
-    )
-    return ConversationHandler.END
-
-
-async def cancel_broadcast(update: Update, context):
-    """Cancel the broadcast."""
-    await update.message.reply_text("❌ Broadcast cancelled.")
-    return ConversationHandler.END
 
 
 # ──────────────────────────────────────────────
@@ -886,7 +882,7 @@ async def withdraw_command(update: Update, context):
             "Try again tomorrow.",
             parse_mode=ParseMode.HTML,
         )
-        return
+        return ConversationHandler.END
     
     if balance < min_withdraw:
         await update.message.reply_text(
@@ -895,7 +891,7 @@ async def withdraw_command(update: Update, context):
             f"Minimum Required: ₹{min_withdraw}",
             parse_mode=ParseMode.HTML,
         )
-        return
+        return ConversationHandler.END
     
     text = (
         "💳 <b>Withdraw Money</b>\n"
@@ -908,17 +904,14 @@ async def withdraw_command(update: Update, context):
         "Send /cancel to abort.\n"
     )
     
-    context.user_data["withdrawing"] = True
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    return 1  # Next state
 
 
 async def withdrawal_amount(update: Update, context):
     """Process withdrawal amount."""
-    if not context.user_data.get("withdrawing"):
-        return
-    
+    user_id = update.effective_user.id
     try:
-        user_id = update.effective_user.id
         amount = float(update.message.text)
         
         data = load_balance_data()
@@ -926,17 +919,16 @@ async def withdrawal_amount(update: Update, context):
         
         if amount < min_withdraw:
             await update.message.reply_text(f"❌ Minimum amount is ₹{min_withdraw}")
-            return
+            return 1  # Stay in state
         
         user_balance = get_user_balance(user_id)
         if user_balance.get("balance", 0) < amount:
             await update.message.reply_text("❌ Insufficient balance!")
-            return
+            return 1
         
         # Process withdrawal
         if subtract_balance(str(user_id), amount):
             record_withdrawal(str(user_id), amount)
-            context.user_data["withdrawing"] = False
             
             await update.message.reply_text(
                 f"✅ <b>Withdrawal Successful!</b>\n\n"
@@ -946,10 +938,19 @@ async def withdrawal_amount(update: Update, context):
                 f"Admin will review and process.",
                 parse_mode=ParseMode.HTML,
             )
+            return ConversationHandler.END
         else:
             await update.message.reply_text("❌ Withdrawal failed. Try again.")
+            return 1
     except ValueError:
         await update.message.reply_text("❌ Invalid amount. Send a number (e.g., 30)")
+        return 1
+
+
+async def cancel_withdrawal(update: Update, context):
+    """Cancel withdrawal."""
+    await update.message.reply_text("❌ Withdrawal cancelled.")
+    return ConversationHandler.END
 
 
 async def my_referrals_command(update: Update, context):
@@ -965,7 +966,7 @@ async def my_referrals_command(update: Update, context):
             "Start sharing your link to earn! 🔗",
             parse_mode=ParseMode.HTML,
             reply_markup=ReplyKeyboardMarkup([
-                [KeyboardButton("🔗 Share Referral Link")],
+                [KeyboardButton("🔗 Referral Link")],
                 [KeyboardButton("◀️ Back")],
             ], resize_keyboard=True),
         )
@@ -1003,12 +1004,12 @@ async def settings_command(update: Update, context):
         f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
         f"📝 <b>Name:</b> {user_data.get('name', 'Unknown')}\n"
         f"📅 <b>Joined:</b> {user_data.get('joined', 'N/A')}\n"
+        f"✅ <b>Verified:</b> {'Yes' if user_data.get('verified') else 'No'}\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "✅ Language: English\n"
         "🔔 Notifications: On\n"
-        "🔒 Account: Verified ✓\n"
     )
     
     await update.message.reply_text(
@@ -1056,6 +1057,9 @@ async def help_command(update: Update, context):
     )
 
 
+# ──────────────────────────────────────────────
+#  MAIN MENU BUTTON HANDLER
+# ──────────────────────────────────────────────
 async def handle_button_press(update: Update, context):
     """Handle keyboard button presses."""
     if not update.message or not update.message.text:
@@ -1102,159 +1106,6 @@ async def handle_button_press(update: Update, context):
         await admin_command(update, context)
         return
     
-    # Admin buttons
-    if text == "📊 Stats":
-        users = load_users()
-        await update.message.reply_text(
-            f"📊 <b>Bot Stats</b>\n\n👥 Total users: <b>{len(users)}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
-        )
-        return
-    
-    if text == "📈 Analytics":
-        await update.message.reply_text(
-            get_analytics_summary(),
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
-        )
-        return
-    
-    if text in ["👥 All Users", "👥 Users"]:
-        users = load_users()
-        if not users:
-            await update.message.reply_text("❌ No users yet.", reply_markup=get_back_keyboard())
-            return
-        lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
-        for i, (uid, info) in enumerate(list(users.items())[:50], 1):
-            name = info.get("name", "Unknown")
-            username = info.get("username")
-            joined = info.get("joined", "N/A")
-            uname_str = f" @{username}" if username else ""
-            lines.append(f"{i}. <b>{name}</b>{uname_str} | ID: <code>{uid}</code> | {joined}")
-        text_output = "\n".join(lines[:2000])
-        await update.message.reply_text(text_output, parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
-        return
-    
-    if text == "🔍 Check Channels":
-        lines = ["🔍 <b>Channel Access Check</b>\n"]
-        for i, chat_id in enumerate(CHANNEL_IDS, 1):
-            try:
-                chat = await context.bot.get_chat(chat_id)
-                lines.append(f"✅ Channel {i}: <b>{chat.title}</b> (ID: <code>{chat_id}</code>)")
-            except Exception as e:
-                lines.append(f"❌ Channel {i}: ID <code>{chat_id}</code>")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
-        return
-    
-    if text == "💰 Balance Config":
-        data = load_balance_data()
-        config = data["config"]
-        await update.message.reply_text(
-            f"⚙️ <b>Balance Configuration</b>\n\n"
-            f"💵 Joining Bonus: ₹<b>{config['joining_bonus']}</b>\n"
-            f"👥 Referral Bonus: ₹<b>{config['referral_bonus']}</b>\n"
-            f"🏦 Min Withdrawal: ₹<b>{config['min_withdrawal']}</b>\n"
-            f"📅 Max Daily: <b>{config['max_daily_withdrawals']}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
-        )
-        return
-    
-    if text == "💵 Top Balances":
-        data = load_balance_data()
-        users_data = data["users"]
-        if not users_data:
-            await update.message.reply_text("No balance data yet.", reply_markup=get_back_keyboard())
-            return
-        sorted_users = sorted(users_data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)[:10]
-        lines = ["💰 <b>Top 10 Balances</b>\n"]
-        total = 0
-        for i, (uid, user_data) in enumerate(sorted_users, 1):
-            balance = user_data.get("balance", 0)
-            refs = len(user_data.get("referrals", []))
-            lines.append(f"{i}. ID:<code>{uid}</code> | ₹<b>{balance}</b> | Refs:{refs}")
-            total += balance
-        lines.append(f"\n💵 Total: ₹<b>{total}</b>")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
-        return
-    
-    if text == "📢 Broadcast":
-        await update.message.reply_text(
-            "📢 <b>Broadcast Mode</b>\n\nSend the message to broadcast.\nSend /cancel to abort.",
-            parse_mode=ParseMode.HTML,
-        )
-        context.user_data["awaiting_broadcast"] = True
-        return
-    
-    if text == "💾 Export Users":
-        users = load_users()
-        export_lines = ["user_id,name,username,joined"]
-        for uid, info in users.items():
-            name = info.get("name", "Unknown").replace(",", ";")
-            username = info.get("username") or ""
-            joined = info.get("joined", "N/A")
-            export_lines.append(f"{uid},{name},{username},{joined}")
-        csv_content = "\n".join(export_lines)
-        export_file = "users_export.csv"
-        with open(export_file, "w", encoding="utf-8") as f:
-            f.write(csv_content)
-        try:
-            with open(export_file, "rb") as f:
-                await context.bot.send_document(chat_id=user_id, document=f, caption=f"📄 User Export ({len(users)} users)")
-            await update.message.reply_text("📤 File sent to your DM!", reply_markup=get_back_keyboard())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}", reply_markup=get_back_keyboard())
-        return
-    
-    if text == "� Export Balance":
-        data = load_balance_data()
-        export_file = "balance_export.json"
-        with open(export_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        try:
-            with open(export_file, "rb") as f:
-                total_balance = sum(user.get("balance", 0) for user in data["users"].values())
-                await context.bot.send_document(chat_id=user_id, document=f, caption=f"💰 Balance Export\n\nUsers: {len(data['users'])}\nTotal Balance: ₹{total_balance}")
-            await update.message.reply_text("📤 File sent to your DM!", reply_markup=get_back_keyboard())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}", reply_markup=get_back_keyboard())
-        return
-    
-    if text == "�🗑️ Purge Inactive":
-        await update.message.reply_text(
-            "🗑️ <b>Purge Inactive Users</b>\n\nDelete users who joined 30+ days ago and haven't registered?",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_purge_keyboard(),
-        )
-        return
-    
-    if text == "✅ Yes, Purge":
-        purged, remaining = purge_inactive_users(days=30)
-        await update.message.reply_text(
-            f"✅ <b>Purge Complete!</b>\n🗑️ Deleted: <b>{purged}</b>\n👥 Remaining: <b>{remaining}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_back_keyboard(),
-        )
-        return
-    
-    if text == "⚠️ Delete All":
-        await update.message.reply_text(
-            "⚠️ <b>DELETE ALL USERS</b>\n\nThis will permanently delete ALL data! Confirm?",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_delete_all_keyboard(),
-        )
-        return
-    
-    if text == "⚠️ Yes Delete ALL":
-        delete_all_users()
-        await update.message.reply_text("⚠️ <b>All users deleted!</b>", parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
-        return
-    
-    if text == "◀️ Main Menu":
-        await start(update, context)
-        return
-    
     if text == "◀️ Back":
         # Go to admin panel for admins, or main menu for users
         if update.effective_user.id in ADMIN_IDS:
@@ -1262,23 +1113,76 @@ async def handle_button_press(update: Update, context):
         else:
             await start(update, context)
         return
-    
-    if text == "❌ Cancel":
-        await update.message.reply_text("Cancelled.", reply_markup=get_back_keyboard())
-        return
+
+
+# ──────────────────────────────────────────────
+#  BROADCAST
+# ──────────────────────────────────────────────
+async def broadcast_command(update: Update, context):
+    """Start broadcast flow (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "📢 <b>Broadcast Mode</b>\n\n"
+        "Send me the message you want to broadcast to all users.\n"
+        "Send /cancel to abort.",
+        parse_mode=ParseMode.HTML,
+    )
+    return WAITING_BROADCAST
+
+
+async def broadcast_message(update: Update, context):
+    """Receive the message and send it to all users."""
+    users = load_user_ids()
+    if not users:
+        await update.message.reply_text("❌ No users in the database yet.")
+        return ConversationHandler.END
+
+    sent, failed = 0, 0
+    status_msg = await update.message.reply_text(
+        f"📤 Broadcasting to <b>{len(users)}</b> users...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    for user_id in users:
+        try:
+            await context.bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=update.message.chat_id,
+                message_id=update.message.message_id,
+            )
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Failed to send to {user_id}: {e}")
+            failed += 1
+        # Small delay to avoid hitting Telegram rate limits
+        await asyncio.sleep(0.05)
+
+    await status_msg.edit_text(
+        f"✅ <b>Broadcast Complete!</b>\n\n"
+        f"📨 Sent: <b>{sent}</b>\n"
+        f"❌ Failed: <b>{failed}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+    return ConversationHandler.END
+
+
+async def cancel_broadcast(update: Update, context):
+    """Cancel the broadcast."""
+    await update.message.reply_text("❌ Broadcast cancelled.")
+    return ConversationHandler.END
 
 
 # ──────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────
 def main():
-    # Initialize bot application with handlers
     if not TOKEN:
         raise ValueError("Set the BOT_TOKEN environment variable!")
 
     app = Application.builder().token(TOKEN).build()
 
-    # Admin broadcast conversation handler
+    # Admin broadcast conversation
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_command)],
         states={
@@ -1293,25 +1197,26 @@ def main():
     )
     app.add_handler(broadcast_handler)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("users", users_command))
-    app.add_handler(CommandHandler("checkbot", checkbot_command))
-    app.add_handler(CommandHandler("balance", balance_command))
-    app.add_handler(CommandHandler("referral", referral_command))
-    
-    # Withdrawal conversation handler
+    # Withdrawal conversation
     withdrawal_handler = ConversationHandler(
         entry_points=[CommandHandler("withdraw", withdraw_command)],
         states={
             1: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdrawal_amount)]
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: None)],
+        fallbacks=[CommandHandler("cancel", cancel_withdrawal)],
     )
     app.add_handler(withdrawal_handler)
+
+    # Command handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("balance", balance_command))
+    app.add_handler(CommandHandler("referral", referral_command))
     
-    # Text message handler for button presses (must come before other handlers)
+    # Callback query handler for admin panel
+    app.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_"))
+    
+    # Text message handler for button presses (must come last)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_press))
 
     if RENDER_URL:
