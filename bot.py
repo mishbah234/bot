@@ -1,7 +1,12 @@
 import os
+import json
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ConversationHandler,
+)
 from telegram.constants import ParseMode
 
 # ──────────────────────────────────────────────
@@ -10,11 +15,15 @@ from telegram.constants import ParseMode
 TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
+# Comma-separated admin Telegram IDs, e.g. "123456,789012"
+ADMIN_IDS = [
+    int(x.strip()) for x in os.environ.get("ADMIN_IDS", "0").split(",") if x.strip()
+]
 
 # Channel chat IDs (bot must be admin in these channels)
 CHANNEL_IDS = [
-    int(os.environ.get("CHANNEL_ID_1", "-1002169640991")),
-    int(os.environ.get("CHANNEL_ID_2", "-1002111582843")),
+    int(os.environ.get("CHANNEL_ID_1", "-6097181868")),
+    int(os.environ.get("CHANNEL_ID_2", "-8455891912")),
 ]
 
 # Channel invite links
@@ -31,6 +40,31 @@ REG_LINK = os.environ.get(
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+USERS_FILE = "users.json"
+WAITING_BROADCAST = 1  # ConversationHandler state
+
+
+# ──────────────────────────────────────────────
+#  USER STORAGE
+# ──────────────────────────────────────────────
+def load_users() -> set:
+    """Load stored user IDs from JSON file."""
+    try:
+        with open(USERS_FILE, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def save_user(user_id: int):
+    """Add a user ID and persist to file."""
+    users = load_users()
+    if user_id not in users:
+        users.add(user_id)
+        with open(USERS_FILE, "w") as f:
+            json.dump(list(users), f)
+        logger.info(f"New user saved: {user_id} (total: {len(users)})")
 
 
 # ──────────────────────────────────────────────
@@ -157,6 +191,9 @@ async def check_membership(bot, user_id):
 #  HANDLERS
 # ──────────────────────────────────────────────
 async def start(update: Update, context):
+    # Track user
+    save_user(update.effective_user.id)
+
     await update.message.reply_text(
         welcome_text(),
         parse_mode=ParseMode.HTML,
@@ -210,6 +247,72 @@ async def forwarded_msg(update: Update, context):
 
 
 # ──────────────────────────────────────────────
+#  ADMIN COMMANDS
+# ──────────────────────────────────────────────
+async def stats_command(update: Update, context):
+    """Show bot statistics (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    users = load_users()
+    await update.message.reply_text(
+        f"📊 <b>Bot Stats</b>\n\n"
+        f"👥 Total users: <b>{len(users)}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def broadcast_command(update: Update, context):
+    """Start broadcast flow (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "📢 <b>Broadcast Mode</b>\n\n"
+        "Send me the message you want to broadcast to all users.\n"
+        "Send /cancel to abort.",
+        parse_mode=ParseMode.HTML,
+    )
+    return WAITING_BROADCAST
+
+
+async def broadcast_message(update: Update, context):
+    """Receive the message and send it to all users."""
+    users = load_users()
+    if not users:
+        await update.message.reply_text("❌ No users in the database yet.")
+        return ConversationHandler.END
+
+    sent, failed = 0, 0
+    status_msg = await update.message.reply_text(
+        f"📤 Broadcasting to <b>{len(users)}</b> users...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    for user_id in users:
+        try:
+            await update.message.copy_message(chat_id=user_id)
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Failed to send to {user_id}: {e}")
+            failed += 1
+        # Small delay to avoid hitting Telegram rate limits
+        await asyncio.sleep(0.05)
+
+    await status_msg.edit_text(
+        f"✅ <b>Broadcast Complete!</b>\n\n"
+        f"📨 Sent: <b>{sent}</b>\n"
+        f"❌ Failed: <b>{failed}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+    return ConversationHandler.END
+
+
+async def cancel_broadcast(update: Update, context):
+    """Cancel the broadcast."""
+    await update.message.reply_text("❌ Broadcast cancelled.")
+    return ConversationHandler.END
+
+
+# ──────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────
 def main():
@@ -217,7 +320,24 @@ def main():
         raise ValueError("Set the BOT_TOKEN environment variable!")
 
     app = Application.builder().token(TOKEN).build()
+
+    # Admin broadcast conversation handler
+    broadcast_handler = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_command)],
+        states={
+            WAITING_BROADCAST: [
+                MessageHandler(
+                    filters.ALL & ~filters.COMMAND,
+                    broadcast_message,
+                )
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_broadcast)],
+    )
+    app.add_handler(broadcast_handler)
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
     app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
     app.add_handler(MessageHandler(filters.FORWARDED, forwarded_msg))
