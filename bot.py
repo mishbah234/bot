@@ -1323,7 +1323,11 @@ async def handle_button_press(update: Update, context):
         return
     
     if text == "◀️ Back":
-        await admin_command(update, context)
+        # Go to admin panel for admins, or main menu for users
+        if update.effective_user.id in ADMIN_IDS:
+            await admin_command(update, context)
+        else:
+            await start(update, context)
         return
     
     if text == "❌ Cancel":
