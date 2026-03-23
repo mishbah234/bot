@@ -1313,8 +1313,6 @@ def main():
     
     # Text message handler for button presses (must come before other handlers)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_press))
-    
-    app.add_handler(MessageHandler(filters.FORWARDED, forwarded_msg))
 
     if RENDER_URL:
         webhook_url = f"{RENDER_URL}/webhook"
