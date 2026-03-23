@@ -1272,6 +1272,7 @@ async def handle_button_press(update: Update, context):
 #  MAIN
 # ──────────────────────────────────────────────
 def main():
+    # Initialize bot application with handlers
     if not TOKEN:
         raise ValueError("Set the BOT_TOKEN environment variable!")
 
