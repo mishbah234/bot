@@ -179,10 +179,11 @@ async def check_membership(bot, user_id):
     for chat_id in CHANNEL_IDS:
         try:
             member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            logger.info(f"User {user_id} status in {chat_id}: {member.status}")
             if member.status in ("left", "kicked"):
                 return False
         except Exception as e:
-            logger.error(f"Error checking channel {chat_id}: {e}")
+            logger.error(f"Error checking channel {chat_id} for user {user_id}: {e}")
             return False
     return True
 
@@ -259,6 +260,21 @@ async def stats_command(update: Update, context):
         f"👥 Total users: <b>{len(users)}</b>",
         parse_mode=ParseMode.HTML,
     )
+
+
+async def checkbot_command(update: Update, context):
+    """Debug command to check if bot can access all channels (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    lines = ["🔍 <b>Channel Access Check</b>\n"]
+    for i, chat_id in enumerate(CHANNEL_IDS, 1):
+        try:
+            chat = await context.bot.get_chat(chat_id)
+            lines.append(f"✅ Channel {i}: <b>{chat.title}</b> (ID: <code>{chat_id}</code>)")
+        except Exception as e:
+            lines.append(f"❌ Channel {i}: ID <code>{chat_id}</code> — <b>{e}</b>")
+    lines.append(f"\n📋 Configured IDs: <code>{CHANNEL_IDS}</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def broadcast_command(update: Update, context):
@@ -338,6 +354,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("checkbot", checkbot_command))
     app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
     app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
     app.add_handler(MessageHandler(filters.FORWARDED, forwarded_msg))
