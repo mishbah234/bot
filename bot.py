@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ConversationHandler,
@@ -297,25 +297,27 @@ WITHDRAW_TEXT = (
 #  KEYBOARDS
 # ──────────────────────────────────────────────
 def get_welcome_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌟 Join Channel 1", url=CHANNEL_URLS[0])],
-        [InlineKeyboardButton("🌟 Join Channel 2", url=CHANNEL_URLS[1])],
-        [InlineKeyboardButton("✅ I've Joined Both — Verify", callback_data="verify_join")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🌟 Join Channel 1")],
+        [KeyboardButton("🌟 Join Channel 2")],
+        [KeyboardButton("✅ Verify Both Channels")],
+    ], resize_keyboard=True)
 
 
 def get_retry_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌟 Join Channel 1", url=CHANNEL_URLS[0])],
-        [InlineKeyboardButton("🌟 Join Channel 2", url=CHANNEL_URLS[1])],
-        [InlineKeyboardButton("✅ I've Joined Both — Verify", callback_data="verify_join")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🌟 Join Channel 1")],
+        [KeyboardButton("🌟 Join Channel 2")],
+        [KeyboardButton("✅ Try Verifying Again")],
+    ], resize_keyboard=True)
 
 
 def get_verified_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💸 Withdraw Money", callback_data="withdraw_money")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("💸 Withdraw Money")],
+        [KeyboardButton("💰 Check Balance")],
+        [KeyboardButton("🔗 Get Referral Link")],
+    ], resize_keyboard=True)
 
 
 # ──────────────────────────────────────────────
@@ -351,11 +353,9 @@ async def start(update: Update, context):
 
 
 async def verify_callback(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-
-    is_member = await check_membership(context.bot, query.from_user.id)
-    user_id = query.from_user.id
+    """Handle verification when user presses Verify button."""
+    user_id = update.effective_user.id
+    is_member = await check_membership(context.bot, user_id)
 
     try:
         if is_member:
@@ -366,21 +366,21 @@ async def verify_callback(update: Update, context):
                 joining_bonus = data["config"]["joining_bonus"]
                 add_balance(str(user_id), joining_bonus, "joining_bonus")
             
-            await query.edit_message_text(
+            await update.message.reply_text(
                 verified_text(),
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_verified_keyboard(),
                 disable_web_page_preview=True,
             )
         else:
-            await query.edit_message_text(
+            await update.message.reply_text(
                 not_joined_text(),
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_retry_keyboard(),
                 disable_web_page_preview=True,
             )
-    except Exception:
-        pass  # Message already shows the same content
+    except Exception as e:
+        logger.error(f"Verification error: {e}")
 
 
 async def withdraw_callback(update: Update, context):
@@ -424,9 +424,9 @@ def get_admin_keyboard():
 
 
 def get_back_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("◀️ Back to Admin Panel", callback_data="admin_panel")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("◀️ Back")],
+    ], resize_keyboard=True)
 
 
 ADMIN_PANEL_TEXT = (
@@ -440,18 +440,16 @@ ADMIN_PANEL_TEXT = (
 
 def get_purge_keyboard():
     """Confirmation keyboard for purge operation."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Yes, Purge Inactive", callback_data="admin_purge_confirm"),
-         InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("✅ Yes, Purge"), KeyboardButton("❌ Cancel")],
+    ], resize_keyboard=True)
 
 
 def get_delete_all_keyboard():
     """Confirmation keyboard for delete all operation."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚠️ Yes, Delete ALL", callback_data="admin_delete_all_confirm"),
-         InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")],
-    ])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("⚠️ Yes Delete ALL"), KeyboardButton("❌ Cancel")],
+    ], resize_keyboard=True)
 
 
 def get_analytics_summary() -> str:
@@ -924,10 +922,11 @@ async def referral_command(update: Update, context):
         f"📋 IDs: <code>{', '.join(referrals[:5]) if referrals else 'None'}</code>\n"
     )
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Copy Link", url=referral_link)],
-        [InlineKeyboardButton("💰 View Balance", callback_data="view_balance")],
-    ])
+    keyboard = ReplyKeyboardMarkup([
+        [KeyboardButton("💰 Check Balance")],
+        [KeyboardButton("🔗 Refresh Link")],
+        [KeyboardButton("◀️ Back")],
+    ], resize_keyboard=True)
     
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
@@ -1014,6 +1013,177 @@ async def withdrawal_amount(update: Update, context):
         await update.message.reply_text("❌ Invalid amount. Send a number (e.g., 30)")
 
 
+async def handle_button_press(update: Update, context):
+    """Handle keyboard button presses."""
+    text = update.message.text
+    user_id = update.effective_user.id
+    
+    # Verification buttons
+    if text in ["✅ Verify Both Channels", "✅ Try Verifying Again"]:
+        await verify_callback(update, context)
+        return
+    
+    # User balance buttons
+    if text == "💰 Check Balance":
+        await balance_command(update, context)
+        return
+    
+    if text == "🔗 Get Referral Link" or text == "🔗 Refresh Link":
+        await referral_command(update, context)
+        return
+    
+    if text == "💸 Withdraw Money":
+        await withdraw_command(update, context)
+        return
+    
+    # Admin buttons
+    if text == "📊 Stats":
+        users = load_users()
+        await update.message.reply_text(
+            f"📊 <b>Bot Stats</b>\n\n👥 Total users: <b>{len(users)}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+        return
+    
+    if text == "📈 Analytics":
+        await update.message.reply_text(
+            get_analytics_summary(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+        return
+    
+    if text == "👥 All Users":
+        users = load_users()
+        if not users:
+            await update.message.reply_text("❌ No users yet.", reply_markup=get_back_keyboard())
+            return
+        lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
+        for i, (uid, info) in enumerate(list(users.items())[:50], 1):
+            name = info.get("name", "Unknown")
+            username = info.get("username")
+            joined = info.get("joined", "N/A")
+            uname_str = f" @{username}" if username else ""
+            lines.append(f"{i}. <b>{name}</b>{uname_str} | ID: <code>{uid}</code> | {joined}")
+        text_output = "\n".join(lines[:2000])
+        await update.message.reply_text(text_output, parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
+        return
+    
+    if text == "🔍 Check Channels":
+        lines = ["🔍 <b>Channel Access Check</b>\n"]
+        for i, chat_id in enumerate(CHANNEL_IDS, 1):
+            try:
+                chat = await context.bot.get_chat(chat_id)
+                lines.append(f"✅ Channel {i}: <b>{chat.title}</b> (ID: <code>{chat_id}</code>)")
+            except Exception as e:
+                lines.append(f"❌ Channel {i}: ID <code>{chat_id}</code>")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
+        return
+    
+    if text == "💰 Balance Config":
+        data = load_balance_data()
+        config = data["config"]
+        await update.message.reply_text(
+            f"⚙️ <b>Balance Configuration</b>\n\n"
+            f"💵 Joining Bonus: ₹<b>{config['joining_bonus']}</b>\n"
+            f"👥 Referral Bonus: ₹<b>{config['referral_bonus']}</b>\n"
+            f"🏦 Min Withdrawal: ₹<b>{config['min_withdrawal']}</b>\n"
+            f"📅 Max Daily: <b>{config['max_daily_withdrawals']}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+        return
+    
+    if text == "💵 Top Balances":
+        data = load_balance_data()
+        users_data = data["users"]
+        if not users_data:
+            await update.message.reply_text("No balance data yet.", reply_markup=get_back_keyboard())
+            return
+        sorted_users = sorted(users_data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)[:10]
+        lines = ["💰 <b>Top 10 Balances</b>\n"]
+        total = 0
+        for i, (uid, user_data) in enumerate(sorted_users, 1):
+            balance = user_data.get("balance", 0)
+            refs = len(user_data.get("referrals", []))
+            lines.append(f"{i}. ID:<code>{uid}</code> | ₹<b>{balance}</b> | Refs:{refs}")
+            total += balance
+        lines.append(f"\n💵 Total: ₹<b>{total}</b>")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
+        return
+    
+    if text == "📢 Broadcast":
+        await update.message.reply_text(
+            "📢 <b>Broadcast Mode</b>\n\nSend the message to broadcast.\nSend /cancel to abort.",
+            parse_mode=ParseMode.HTML,
+        )
+        context.user_data["awaiting_broadcast"] = True
+        return
+    
+    if text == "💾 Export Users":
+        users = load_users()
+        export_lines = ["user_id,name,username,joined"]
+        for uid, info in users.items():
+            name = info.get("name", "Unknown").replace(",", ";")
+            username = info.get("username") or ""
+            joined = info.get("joined", "N/A")
+            export_lines.append(f"{uid},{name},{username},{joined}")
+        csv_content = "\n".join(export_lines)
+        export_file = "users_export.csv"
+        with open(export_file, "w", encoding="utf-8") as f:
+            f.write(csv_content)
+        try:
+            with open(export_file, "rb") as f:
+                await context.bot.send_document(chat_id=user_id, document=f, caption=f"📄 User Export ({len(users)} users)")
+            await update.message.reply_text("📤 File sent to your DM!", reply_markup=get_back_keyboard())
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}", reply_markup=get_back_keyboard())
+        return
+    
+    if text == "🗑️ Purge Inactive":
+        await update.message.reply_text(
+            "🗑️ <b>Purge Inactive Users</b>\n\nDelete users who joined 30+ days ago and haven't registered?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_purge_keyboard(),
+        )
+        return
+    
+    if text == "✅ Yes, Purge":
+        purged, remaining = purge_inactive_users(days=30)
+        await update.message.reply_text(
+            f"✅ <b>Purge Complete!</b>\n🗑️ Deleted: <b>{purged}</b>\n👥 Remaining: <b>{remaining}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+        return
+    
+    if text == "⚠️ Delete All":
+        await update.message.reply_text(
+            "⚠️ <b>DELETE ALL USERS</b>\n\nThis will permanently delete ALL data! Confirm?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_delete_all_keyboard(),
+        )
+        return
+    
+    if text == "⚠️ Yes Delete ALL":
+        delete_all_users()
+        await update.message.reply_text("⚠️ <b>All users deleted!</b>", parse_mode=ParseMode.HTML, reply_markup=get_back_keyboard())
+        return
+    
+    if text == "◀️ Main Menu":
+        await start(update, context)
+        return
+    
+    if text == "◀️ Back":
+        await admin_command(update, context)
+        return
+    
+    if text == "❌ Cancel":
+        await update.message.reply_text("Cancelled.", reply_markup=get_back_keyboard())
+        return
+
+
 # ──────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────
@@ -1056,9 +1226,9 @@ def main():
     )
     app.add_handler(withdrawal_handler)
     
-    app.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_"))
-    app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
-    app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
+    # Text message handler for button presses (must come before other handlers)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_press))
+    
     app.add_handler(MessageHandler(filters.FORWARDED, forwarded_msg))
 
     if RENDER_URL:
