@@ -17,13 +17,13 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
 # Comma-separated admin Telegram IDs, e.g. "123456,789012"
 ADMIN_IDS = [
-    int(x.strip()) for x in os.environ.get("ADMIN_IDS", "0").split(",") if x.strip()
+    int(x.strip()) for x in os.environ.get("ADMIN_IDS", "8455891912,6097181868").split(",") if x.strip()
 ]
 
 # Channel chat IDs (bot must be admin in these channels)
 CHANNEL_IDS = [
-    int(os.environ.get("CHANNEL_ID_1", "-6097181868")),
-    int(os.environ.get("CHANNEL_ID_2", "-8455891912")),
+    int(os.environ.get("CHANNEL_ID_1", "-1002169640991")),
+    int(os.environ.get("CHANNEL_ID_2", "-1002111582843")),
 ]
 
 # Channel invite links
