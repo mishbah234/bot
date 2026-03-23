@@ -332,6 +332,48 @@ ADMIN_PANEL_TEXT = (
 )
 
 
+
+async def start(update: Update, context):
+    """Start command - handles referrals and welcome."""
+    user_id = update.effective_user.id
+    save_user(update.effective_user)
+    
+    # Check if this user was referred
+    if context.args:
+        ref_code = context.args[0]
+        if ref_code.startswith("ref_"):
+            try:
+                referrer_id = ref_code.split("_")[1]
+                # Add referral bonus only if not already referred
+                user_balance = get_user_balance(user_id)
+                if referrer_id not in user_balance.get("referrals", []):
+                    add_referral(referrer_id, user_id)
+                    # Get joining bonus
+                    data = load_balance_data()
+                    joining_bonus = data["config"]["joining_bonus"]
+                    add_balance(str(user_id), joining_bonus, "joining_bonus")
+                    
+                    await update.message.reply_text(
+                        f"🎉 <b>Welcome!</b>\n\n"
+                        f"You were referred by a friend!\n"
+                        f"💵 <b>₹{joining_bonus} bonus added!</b>\n"
+                        f"(Your friend also earned ₹3)\n\n"
+                        "Now verify to continue →",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=get_welcome_keyboard(),
+                        disable_web_page_preview=True,
+                    )
+                    return
+            except:
+                pass
+    
+    await update.message.reply_text(
+        welcome_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_welcome_keyboard(),
+        disable_web_page_preview=True,
+    )
+
 def get_purge_keyboard():
     """Confirmation keyboard for purge operation."""
     return ReplyKeyboardMarkup([
