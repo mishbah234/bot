@@ -78,6 +78,30 @@ def load_user_ids() -> set:
     return {int(uid) for uid in users.keys()}
 
 
+async def notify_admins_new_user(user):
+    """Send a notification to all admins about a new user."""
+    if not ADMIN_IDS:
+        return
+    user_id = user.id
+    name = user.full_name or "Unknown"
+    username = user.username
+    joined_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    mention = f"@{username}" if username else f"[{name}](tg://user?id={user_id})"
+    text = (
+        f"🆕 <b>New User Joined!</b>\n\n"
+        f"👤 <b>Name:</b> {name}\n"
+        f"📛 <b>Username:</b> {mention}\n"
+        f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+        f"📅 <b>Joined at:</b> {joined_at}\n"
+        f"\n🎉 Welcome aboard!"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"Failed to send new-user notification to admin {admin_id}: {e}")
+
+
 def save_user(user):
     """Save user with details. Accepts a Telegram User object or just an int ID."""
     users = load_users()
@@ -90,7 +114,9 @@ def save_user(user):
         name = "Unknown"
         username = None
 
-    if uid not in users:
+    is_new = uid not in users
+
+    if is_new:
         users[uid] = {
             "name": name,
             "username": username,
@@ -100,6 +126,10 @@ def save_user(user):
         with open(USERS_FILE, "w") as f:
             json.dump(users, f, indent=2)
         logger.info(f"New user saved: {uid} - {name} (total: {len(users)})")
+
+        # Trigger admin notification asynchronously
+        asyncio.create_task(notify_admins_new_user(user))
+
     elif users[uid]["name"] == "Unknown" and hasattr(user, "full_name"):
         # Update name if it was previously unknown
         users[uid]["name"] = user.full_name or "Unknown"
@@ -128,7 +158,7 @@ def is_verified(user_id: int) -> bool:
 
 
 # ──────────────────────────────────────────────
-#  BALANCE & REFERRAL SYSTEM
+#  BALANCE & REFERRAL SYSTEM (unchanged)
 # ──────────────────────────────────────────────
 def load_balance_data() -> dict:
     """Load balance and referral data."""
@@ -239,7 +269,7 @@ def record_withdrawal(user_id: str, amount: float) -> None:
 
 
 # ──────────────────────────────────────────────
-#  MESSAGES
+#  MESSAGES (unchanged)
 # ──────────────────────────────────────────────
 def welcome_text():
     return (
@@ -317,7 +347,7 @@ WITHDRAW_TEXT = (
 
 
 # ──────────────────────────────────────────────
-#  KEYBOARDS
+#  KEYBOARDS (unchanged)
 # ──────────────────────────────────────────────
 def get_welcome_keyboard():
     return ReplyKeyboardMarkup([
@@ -568,7 +598,7 @@ async def start(update: Update, context):
 
 
 # ──────────────────────────────────────────────
-#  ADMIN PANEL
+#  ADMIN PANEL (unchanged)
 # ──────────────────────────────────────────────
 async def admin_command(update: Update, context):
     """Show admin panel (admin only)."""
@@ -799,7 +829,7 @@ async def admin_panel_callback(update: Update, context):
 
 
 # ──────────────────────────────────────────────
-#  BALANCE COMMANDS
+#  BALANCE COMMANDS (unchanged)
 # ──────────────────────────────────────────────
 async def balance_command(update: Update, context):
     """Show user's balance and referral info."""
