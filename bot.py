@@ -291,9 +291,13 @@ async def forwarded_msg(update: Update, context):
 def get_admin_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-         InlineKeyboardButton("👥 Users", callback_data="admin_users")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("� Analytics", callback_data="admin_analytics")],
+        [InlineKeyboardButton("👥 Users", callback_data="admin_users"),
          InlineKeyboardButton("🔍 Check Channels", callback_data="admin_checkbot")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("💾 Export Users", callback_data="admin_export")],
+        [InlineKeyboardButton("🗑️ Purge Users", callback_data="admin_purge"),
+         InlineKeyboardButton("⚠️ Delete All", callback_data="admin_delete_confirm")],
     ])
 
 
@@ -310,6 +314,109 @@ ADMIN_PANEL_TEXT = (
     "\n"
     "Choose an option below 👇\n"
 )
+
+
+def get_purge_keyboard():
+    """Confirmation keyboard for purge operation."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Yes, Purge Inactive", callback_data="admin_purge_confirm"),
+         InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")],
+    ])
+
+
+def get_delete_all_keyboard():
+    """Confirmation keyboard for delete all operation."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚠️ Yes, Delete ALL", callback_data="admin_delete_all_confirm"),
+         InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")],
+    ])
+
+
+def get_analytics_summary() -> str:
+    """Generate analytics summary."""
+    from datetime import datetime as dt, timedelta
+    
+    users = load_users()
+    if not users:
+        return "📈 <b>Analytics</b>\n\nNo user data yet."
+    
+    # Parse join dates
+    join_dates = []
+    today = dt.now().date()
+    last_7_days = 0
+    last_30_days = 0
+    
+    for uid, info in users.items():
+        joined_str = info.get("joined")
+        if joined_str:
+            try:
+                joined_date = dt.strptime(joined_str, "%Y-%m-%d %H:%M").date()
+                join_dates.append(joined_date)
+                
+                days_diff = (today - joined_date).days
+                if days_diff <= 7:
+                    last_7_days += 1
+                if days_diff <= 30:
+                    last_30_days += 1
+            except:
+                pass
+    
+    # Count unknown users (haven't updated profile)
+    unknown_count = sum(1 for info in users.values() if info.get("name") == "Unknown")
+    
+    # Build summary
+    lines = [
+        "📈 <b>Analytics</b>\n",
+        "━━━━━━━━━━━━━━━━━━━━━━\n",
+        f"👥 Total Users: <b>{len(users)}</b>",
+        f"🆕 Last 7 Days: <b>{last_7_days}</b>",
+        f"📅 Last 30 Days: <b>{last_30_days}</b>",
+        f"❓ Unknown Users: <b>{unknown_count}</b>",
+        f"✅ Registered: <b>{len(users) - unknown_count}</b>",
+    ]
+    
+    return "\n".join(lines)
+
+
+def purge_inactive_users(days: int = 30) -> tuple:
+    """Remove users who joined more than 'days' ago and are still unknown.
+    Returns (purged_count, remaining_count)"""
+    from datetime import datetime as dt
+    
+    users = load_users()
+    today = dt.now().date()
+    purged = 0
+    
+    to_remove = []
+    for uid, info in users.items():
+        joined_str = info.get("joined")
+        if joined_str:
+            try:
+                joined_date = dt.strptime(joined_str, "%Y-%m-%d %H:%M").date()
+                days_old = (today - joined_date).days
+                
+                # Remove if: older than threshold AND still unknown (not verified)
+                if days_old >= days and info.get("name") == "Unknown":
+                    to_remove.append(uid)
+            except:
+                pass
+    
+    for uid in to_remove:
+        del users[uid]
+        purged += 1
+    
+    if purged > 0:
+        with open(USERS_FILE, "w") as f:
+            json.dump(users, f, indent=2)
+    
+    return purged, len(users)
+
+
+def delete_all_users() -> None:
+    """Delete all users from the database."""
+    with open(USERS_FILE, "w") as f:
+        json.dump({}, f, indent=2)
+    logger.info("All users deleted!")
 
 
 async def admin_command(update: Update, context):
@@ -396,6 +503,83 @@ async def admin_panel_callback(update: Update, context):
         lines.append(f"\n📋 Configured IDs: <code>{CHANNEL_IDS}</code>")
         await query.edit_message_text(
             "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+    elif action == "admin_analytics":
+        await query.edit_message_text(
+            get_analytics_summary(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+    elif action == "admin_export":
+        users = load_users()
+        export_lines = ["user_id,name,username,joined"]
+        for uid, info in users.items():
+            name = info.get("name", "Unknown").replace(",", ";")
+            username = info.get("username") or ""
+            joined = info.get("joined", "N/A")
+            export_lines.append(f"{uid},{name},{username},{joined}")
+        
+        csv_content = "\n".join(export_lines)
+        
+        # Save to file
+        export_file = "users_export.csv"
+        with open(export_file, "w", encoding="utf-8") as f:
+            f.write(csv_content)
+        
+        # Send file
+        try:
+            with open(export_file, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=query.from_user.id,
+                    document=f,
+                    caption=f"📄 User Export\n\n✅ {len(users)} users exported to CSV",
+                    parse_mode=ParseMode.HTML,
+                )
+            await query.answer("📤 File sent to your DM!", show_alert=False)
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+
+    elif action == "admin_purge":
+        await query.edit_message_text(
+            "🗑️ <b>Purge Inactive Users</b>\n\n"
+            "This will delete users who:\n"
+            "• Joined more than 30 days ago\n"
+            "• Haven't completed registration (still 'Unknown')\n\n"
+            "Are you sure?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_purge_keyboard(),
+        )
+
+    elif action == "admin_purge_confirm":
+        purged, remaining = purge_inactive_users(days=30)
+        await query.edit_message_text(
+            f"✅ <b>Purge Complete!</b>\n\n"
+            f"🗑️ Deleted: <b>{purged}</b> inactive users\n"
+            f"👥 Remaining: <b>{remaining}</b> users",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+        logger.info(f"Purged {purged} inactive users. {remaining} remaining.")
+
+    elif action == "admin_delete_confirm":
+        await query.edit_message_text(
+            "⚠️ <b>DELETE ALL USERS</b>\n\n"
+            "This will <b>permanently delete</b> ALL user data!\n"
+            "This action <b>cannot be undone</b>.\n\n"
+            "Are you absolutely sure?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_delete_all_keyboard(),
+        )
+
+    elif action == "admin_delete_all_confirm":
+        delete_all_users()
+        await query.edit_message_text(
+            "⚠️ <b>All users deleted!</b>\n\n"
+            "The database is now empty.",
             parse_mode=ParseMode.HTML,
             reply_markup=get_back_keyboard(),
         )
