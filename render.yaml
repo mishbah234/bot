@@ -1,12 +1,14 @@
 services:
   - type: web
     name: telegram-bot
-    runtime: python
+    runtime: python3.11
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false
+      - key: ADMIN_IDS
+        value: "8455891912,6097181868"   # replace with your actual admin IDs
       - key: CHANNEL_ID_1
         value: "-1002169640991"
       - key: CHANNEL_ID_2
@@ -17,5 +19,3 @@ services:
         value: "https://t.me/+uGeLDa05s7M4NjFl"
       - key: REG_LINK
         value: "https://www.tgdream16.com/#/register?invitationCode=632738378641"
-      - key: PYTHON_VERSION
-        value: "3.11.0"
