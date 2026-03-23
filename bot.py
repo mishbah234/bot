@@ -286,8 +286,121 @@ async def forwarded_msg(update: Update, context):
 
 
 # ──────────────────────────────────────────────
-#  ADMIN COMMANDS
+#  ADMIN PANEL
 # ──────────────────────────────────────────────
+def get_admin_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+         InlineKeyboardButton("👥 Users", callback_data="admin_users")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("🔍 Check Channels", callback_data="admin_checkbot")],
+    ])
+
+
+def get_back_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Back to Admin Panel", callback_data="admin_panel")],
+    ])
+
+
+ADMIN_PANEL_TEXT = (
+    "⚙️ <b>Admin Panel</b>\n"
+    "\n"
+    "━━━━━━━━━━━━━━━━━━━━━━\n"
+    "\n"
+    "Choose an option below 👇\n"
+)
+
+
+async def admin_command(update: Update, context):
+    """Show admin panel (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    await update.message.reply_text(
+        ADMIN_PANEL_TEXT,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_admin_keyboard(),
+    )
+
+
+async def admin_panel_callback(update: Update, context):
+    """Handle admin panel button clicks."""
+    query = update.callback_query
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔ Admin only!", show_alert=True)
+        return
+
+    action = query.data
+    await query.answer()
+
+    if action == "admin_panel":
+        await query.edit_message_text(
+            ADMIN_PANEL_TEXT,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_admin_keyboard(),
+        )
+        return
+
+    if action == "admin_stats":
+        users = load_users()
+        await query.edit_message_text(
+            f"📊 <b>Bot Stats</b>\n\n"
+            f"👥 Total users: <b>{len(users)}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+    elif action == "admin_users":
+        users = load_users()
+        if not users:
+            await query.edit_message_text(
+                "❌ No users yet.",
+                reply_markup=get_back_keyboard(),
+            )
+            return
+        lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
+        for i, (uid, info) in enumerate(users.items(), 1):
+            name = info.get("name", "Unknown")
+            username = info.get("username")
+            joined = info.get("joined", "N/A")
+            uname_str = f" @{username}" if username else ""
+            lines.append(f"{i}. <b>{name}</b>{uname_str}\n   ID: <code>{uid}</code> | Joined: {joined}")
+        text = "\n".join(lines)
+        # Telegram message limit is 4096 chars
+        if len(text) > 4000:
+            text = text[:4000] + "\n\n... (truncated)"
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+    elif action == "admin_broadcast":
+        await query.edit_message_text(
+            "📢 <b>Broadcast Mode</b>\n\n"
+            "Send me the message you want to broadcast to all users.\n"
+            "Send /cancel to abort.",
+            parse_mode=ParseMode.HTML,
+        )
+        # Set conversation state for broadcast
+        context.user_data["awaiting_broadcast"] = True
+
+    elif action == "admin_checkbot":
+        lines = ["🔍 <b>Channel Access Check</b>\n"]
+        for i, chat_id in enumerate(CHANNEL_IDS, 1):
+            try:
+                chat = await context.bot.get_chat(chat_id)
+                lines.append(f"✅ Channel {i}: <b>{chat.title}</b> (ID: <code>{chat_id}</code>)")
+            except Exception as e:
+                lines.append(f"❌ Channel {i}: ID <code>{chat_id}</code> — <b>{e}</b>")
+        lines.append(f"\n📋 Configured IDs: <code>{CHANNEL_IDS}</code>")
+        await query.edit_message_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_keyboard(),
+        )
+
+
 async def stats_command(update: Update, context):
     """Show bot statistics (admin only)."""
     if update.effective_user.id not in ADMIN_IDS:
@@ -431,9 +544,11 @@ def main():
     app.add_handler(broadcast_handler)
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("checkbot", checkbot_command))
+    app.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
     app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
     app.add_handler(MessageHandler(filters.FORWARDED, forwarded_msg))
