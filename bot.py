@@ -209,20 +209,23 @@ async def verify_callback(update: Update, context):
 
     is_member = await check_membership(context.bot, query.from_user.id)
 
-    if is_member:
-        await query.edit_message_text(
-            verified_text(),
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_verified_keyboard(),
-            disable_web_page_preview=True,
-        )
-    else:
-        await query.edit_message_text(
-            not_joined_text(),
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_retry_keyboard(),
-            disable_web_page_preview=True,
-        )
+    try:
+        if is_member:
+            await query.edit_message_text(
+                verified_text(),
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_verified_keyboard(),
+                disable_web_page_preview=True,
+            )
+        else:
+            await query.edit_message_text(
+                not_joined_text(),
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_retry_keyboard(),
+                disable_web_page_preview=True,
+            )
+    except Exception:
+        pass  # Message already shows the same content
 
 
 async def withdraw_callback(update: Update, context):
@@ -305,7 +308,11 @@ async def broadcast_message(update: Update, context):
 
     for user_id in users:
         try:
-            await update.message.copy_message(chat_id=user_id)
+            await context.bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=update.message.chat_id,
+                message_id=update.message.message_id,
+            )
             sent += 1
         except Exception as e:
             logger.warning(f"Failed to send to {user_id}: {e}")
