@@ -306,7 +306,7 @@ def get_retry_keyboard():
     ], resize_keyboard=True)
 
 
-def get_verified_keyboard():
+def get_verified_keyboard(user_id=None):
     return ReplyKeyboardMarkup([
         [KeyboardButton("� Balance"), KeyboardButton("🔗 Referral Link")],
         [KeyboardButton("💸 Withdraw"), KeyboardButton("👥 My Referrals")],
