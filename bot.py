@@ -1150,6 +1150,9 @@ async def help_command(update: Update, context):
 
 async def handle_button_press(update: Update, context):
     """Handle keyboard button presses."""
+    if not update.message or not update.message.text:
+        return
+    
     text = update.message.text
     user_id = update.effective_user.id
     
