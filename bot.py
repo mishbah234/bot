@@ -297,16 +297,12 @@ WITHDRAW_TEXT = (
 def get_welcome_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✅ Verify Both Channels")],
-        [KeyboardButton("💰 Check Balance")],
-        [KeyboardButton("📞 Need Help?")],
     ], resize_keyboard=True)
 
 
 def get_retry_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✅ Try Verifying Again")],
-        [KeyboardButton("💰 Check Balance")],
-        [KeyboardButton("📞 Help")],
     ], resize_keyboard=True)
 
 
@@ -1291,7 +1287,21 @@ async def handle_button_press(update: Update, context):
             await update.message.reply_text(f"❌ Error: {e}", reply_markup=get_back_keyboard())
         return
     
-    if text == "🗑️ Purge Inactive":
+    if text == "� Export Balance":
+        data = load_balance_data()
+        export_file = "balance_export.json"
+        with open(export_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        try:
+            with open(export_file, "rb") as f:
+                total_balance = sum(user.get("balance", 0) for user in data["users"].values())
+                await context.bot.send_document(chat_id=user_id, document=f, caption=f"💰 Balance Export\n\nUsers: {len(data['users'])}\nTotal Balance: ₹{total_balance}")
+            await update.message.reply_text("📤 File sent to your DM!", reply_markup=get_back_keyboard())
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}", reply_markup=get_back_keyboard())
+        return
+    
+    if text == "�🗑️ Purge Inactive":
         await update.message.reply_text(
             "🗑️ <b>Purge Inactive Users</b>\n\nDelete users who joined 30+ days ago and haven't registered?",
             parse_mode=ParseMode.HTML,
