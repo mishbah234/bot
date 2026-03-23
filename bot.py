@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -48,23 +49,57 @@ WAITING_BROADCAST = 1  # ConversationHandler state
 # ──────────────────────────────────────────────
 #  USER STORAGE
 # ──────────────────────────────────────────────
-def load_users() -> set:
-    """Load stored user IDs from JSON file."""
+def load_users() -> dict:
+    """Load stored users from JSON file. Returns dict of user_id -> details."""
     try:
         with open(USERS_FILE, "r") as f:
-            return set(json.load(f))
+            data = json.load(f)
+        # Migrate from old list format [id, id, ...] to new dict format
+        if isinstance(data, list):
+            migrated = {}
+            for uid in data:
+                migrated[str(uid)] = {"name": "Unknown", "username": None, "joined": None}
+            with open(USERS_FILE, "w") as f:
+                json.dump(migrated, f, indent=2)
+            return migrated
+        return data
     except (FileNotFoundError, json.JSONDecodeError):
-        return set()
+        return {}
 
 
-def save_user(user_id: int):
-    """Add a user ID and persist to file."""
+def load_user_ids() -> set:
+    """Load just the user IDs as a set of ints."""
     users = load_users()
-    if user_id not in users:
-        users.add(user_id)
+    return {int(uid) for uid in users.keys()}
+
+
+def save_user(user):
+    """Save user with details. Accepts a Telegram User object or just an int ID."""
+    users = load_users()
+    if hasattr(user, "id"):
+        uid = str(user.id)
+        name = user.full_name or "Unknown"
+        username = user.username
+    else:
+        uid = str(user)
+        name = "Unknown"
+        username = None
+
+    if uid not in users:
+        users[uid] = {
+            "name": name,
+            "username": username,
+            "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
         with open(USERS_FILE, "w") as f:
-            json.dump(list(users), f)
-        logger.info(f"New user saved: {user_id} (total: {len(users)})")
+            json.dump(users, f, indent=2)
+        logger.info(f"New user saved: {uid} - {name} (total: {len(users)})")
+    elif users[uid]["name"] == "Unknown" and hasattr(user, "full_name"):
+        # Update name if it was previously unknown
+        users[uid]["name"] = user.full_name or "Unknown"
+        users[uid]["username"] = user.username
+        with open(USERS_FILE, "w") as f:
+            json.dump(users, f, indent=2)
 
 
 # ──────────────────────────────────────────────
@@ -192,8 +227,8 @@ async def check_membership(bot, user_id):
 #  HANDLERS
 # ──────────────────────────────────────────────
 async def start(update: Update, context):
-    # Track user
-    save_user(update.effective_user.id)
+    # Track user with details
+    save_user(update.effective_user)
 
     await update.message.reply_text(
         welcome_text(),
@@ -265,6 +300,42 @@ async def stats_command(update: Update, context):
     )
 
 
+async def users_command(update: Update, context):
+    """Show all users with details (admin only)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    users = load_users()
+    if not users:
+        await update.message.reply_text("❌ No users yet.")
+        return
+
+    lines = [f"👥 <b>All Users ({len(users)})</b>\n"]
+    for i, (uid, info) in enumerate(users.items(), 1):
+        name = info.get("name", "Unknown")
+        username = info.get("username")
+        joined = info.get("joined", "N/A")
+        uname_str = f" @{username}" if username else ""
+        lines.append(f"{i}. <b>{name}</b>{uname_str}\n   ID: <code>{uid}</code> | Joined: {joined}")
+
+    # Telegram message limit is 4096 chars, split if needed
+    text = "\n".join(lines)
+    if len(text) <= 4096:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    else:
+        # Send in chunks
+        chunk = []
+        chunk_len = 0
+        for line in lines:
+            if chunk_len + len(line) + 1 > 4000:
+                await update.message.reply_text("\n".join(chunk), parse_mode=ParseMode.HTML)
+                chunk = []
+                chunk_len = 0
+            chunk.append(line)
+            chunk_len += len(line) + 1
+        if chunk:
+            await update.message.reply_text("\n".join(chunk), parse_mode=ParseMode.HTML)
+
+
 async def checkbot_command(update: Update, context):
     """Debug command to check if bot can access all channels (admin only)."""
     if update.effective_user.id not in ADMIN_IDS:
@@ -295,7 +366,7 @@ async def broadcast_command(update: Update, context):
 
 async def broadcast_message(update: Update, context):
     """Receive the message and send it to all users."""
-    users = load_users()
+    users = load_user_ids()
     if not users:
         await update.message.reply_text("❌ No users in the database yet.")
         return ConversationHandler.END
@@ -361,6 +432,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("checkbot", checkbot_command))
     app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify_join$"))
     app.add_handler(CallbackQueryHandler(withdraw_callback, pattern="^withdraw_money$"))
