@@ -393,7 +393,7 @@ async def verify_callback(update: Update, context):
             await update.message.reply_text(
                 verified_text(),
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_verified_keyboard(),
+                reply_markup=get_verified_keyboard(user_id),
                 disable_web_page_preview=True,
             )
         else:
@@ -1180,6 +1180,14 @@ async def handle_button_press(update: Update, context):
     
     if text in ["📞 Help", "📞 Need Help?"]:
         await help_command(update, context)
+        return
+    
+    if text == "⚙️ Admin Panel":
+        # Only admins can access admin panel
+        if update.effective_user.id not in ADMIN_IDS:
+            await update.message.reply_text("⛔ Admin only!", reply_markup=get_verified_keyboard(update.effective_user.id))
+            return
+        await admin_command(update, context)
         return
     
     # Admin buttons
