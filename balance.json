@@ -5,5 +5,582 @@
     "min_withdrawal": 30,
     "max_daily_withdrawals": 1
   },
-  "users": {}
+  "users": {
+    "6050080070": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5614201058": {
+      "balance": 50,
+      "referrals": [
+        "6050080070",
+        "8695941890",
+        "7397498757",
+        "7649946547",
+        "8110508398",
+        "5614201058",
+        "1718080955",
+        "5962110353",
+        "8222280957",
+        "7203739957",
+        "8331722350",
+        "8090825735",
+        "7396924307",
+        "7483384187",
+        "8174035215",
+        "6658569557"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8695941890": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5194824043": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7397498757": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7649946547": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5040404411": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1075646026": {
+      "balance": 3,
+      "referrals": [
+        "1075646026"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8455891912": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7056291013": {
+      "balance": 5,
+      "referrals": [
+        "7056291013"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8359014627": {
+      "balance": 5,
+      "referrals": [
+        "8727174107"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7954530012": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1332875227": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6736509843": {
+      "balance": 5,
+      "referrals": [
+        "5983907004"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8171112593": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1308531054": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5983907004": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7386313630": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5951572446": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6806195257": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8482643473": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6069061942": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5050055289": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1906741835": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5615651081": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6006365140": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6741564888": {
+      "balance": 4,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7929917687": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7904490018": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7996881746": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8430037628": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8486142089": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7798133321": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8727174107": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5220973769": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6511645984": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7891305195": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8594993150": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8645297037": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5786424324": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1272945434": {
+      "balance": 5,
+      "referrals": [
+        "1272945434"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8318238973": {
+      "balance": 8,
+      "referrals": [
+        "8318238973",
+        "8768963615"
+      ],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8110508398": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8349479005": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8768963615": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5755257469": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8500685172": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6609650792": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "511083363": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1000476551": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8558526898": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7118393139": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8497090273": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6358271270": {
+      "balance": 4,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7972884900": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6097181868": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1718080955": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "571880473": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5962110353": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1974811723": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8222280957": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7203739957": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8331722350": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8090825735": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7396924307": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7483384187": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8570780086": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8174035215": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5694785236": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6658569557": {
+      "balance": 0,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8322006398": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6004649275": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7940612537": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7954085518": {
+      "balance": 4,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8551286690": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6917337651": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7627764240": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5219688112": {
+      "balance": 4,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1975123203": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5570893599": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5302502086": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "5945636843": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7733465375": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6253041412": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6784647536": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8006743185": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "1855101130": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "6576176803": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8651470262": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "8268687042": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    },
+    "7965054823": {
+      "balance": 2,
+      "referrals": [],
+      "withdrawals": [],
+      "last_withdrawal": null
+    }
+  }
 }
