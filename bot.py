@@ -469,8 +469,8 @@ def load_user_ids() -> set:
     return {int(uid) for uid in users.keys()}
 
 
-async def notify_admins_new_user(user, context=None):
-    if not ADMIN_IDS or not context:
+async def notify_admins_new_user(user, bot):
+    if not ADMIN_IDS or not bot:
         return
     user_id = user.id
     name = user.full_name or "Unknown"
@@ -486,7 +486,7 @@ async def notify_admins_new_user(user, context=None):
     )
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=text, parse_mode=ParseMode.HTML)
+            await bot.send_message(chat_id=admin_id, text=text, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"Failed to send new-user notification to admin {admin_id}: {e}")
 
