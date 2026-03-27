@@ -9,6 +9,11 @@ from telegram.ext import (
     MessageHandler, filters, ConversationHandler,
 )
 from telegram.constants import ParseMode
+from telegram.error import Forbidden
+import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
+import time
 
 # ──────────────────────────────────────────────
 #  CONFIG
@@ -16,6 +21,7 @@ from telegram.constants import ParseMode
 TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
+DATABASE_URL = os.environ.get("DATABASE_URL")
 # Comma-separated admin Telegram IDs
 ADMIN_IDS = [
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "8455891912,6097181868").split(",") if x.strip()
@@ -49,38 +55,422 @@ USERS_FILE = "users.json"
 BALANCE_FILE = "balance.json"
 WAITING_BROADCAST = 1  # ConversationHandler state
 
+# Global bot instance (initialized in main())
+bot_instance = None
+
+
+# ──────────────────────────────────────────────
+#  DATABASE INFRASTRUCTURE
+# ──────────────────────────────────────────────
+db_pool = None
+
+
+def init_db_pool(max_retries=5, retry_delay=2):
+    """Initialize database connection pool with retry logic."""
+    global db_pool
+    
+    if not DATABASE_URL:
+        logger.warning("DATABASE_URL not set - database features will be unavailable")
+        return None
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Initializing database connection pool (attempt {attempt + 1}/{max_retries})...")
+            db_pool = psycopg2.pool.SimpleConnectionPool(
+                minconn=1,
+                maxconn=10,
+                dsn=DATABASE_URL
+            )
+            logger.info("Database connection pool initialized successfully")
+            return db_pool
+        except Exception as e:
+            logger.error(f"Failed to initialize database pool (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached - database connection failed")
+                raise
+    
+    return None
+
+
+def get_db_connection():
+    """Get a connection from the pool with error handling."""
+    if db_pool is None:
+        raise Exception("Database pool not initialized")
+    
+    try:
+        conn = db_pool.getconn()
+        return conn
+    except Exception as e:
+        logger.error(f"Failed to get database connection: {e}")
+        raise
+
+
+def release_db_connection(conn):
+    """Release a connection back to the pool."""
+    if db_pool and conn:
+        try:
+            db_pool.putconn(conn)
+        except Exception as e:
+            logger.error(f"Failed to release database connection: {e}")
+
+
+def init_db_schema():
+    """Create database tables if they don't exist."""
+    if not DATABASE_URL:
+        logger.info("Skipping database schema initialization (DATABASE_URL not set)")
+        return
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                name TEXT,
+                username TEXT,
+                joined TIMESTAMP,
+                verified BOOLEAN DEFAULT FALSE
+            )
+        """)
+        
+        # Create balances table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS balances (
+                user_id TEXT PRIMARY KEY,
+                balance REAL DEFAULT 0,
+                last_withdrawal DATE,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Create referrals table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                referrer_id TEXT,
+                referred_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (referrer_id, referred_id),
+                FOREIGN KEY (referrer_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Create withdrawals table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT,
+                amount REAL,
+                date TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Create config table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        
+        # Insert default config values if not exists
+        default_config = {
+            "joining_bonus": "2",
+            "referral_bonus": "3",
+            "min_withdrawal": "30",
+            "max_daily_withdrawals": "1"
+        }
+        
+        for key, value in default_config.items():
+            cursor.execute("""
+                INSERT INTO config (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO NOTHING
+            """, (key, value))
+        
+        conn.commit()
+        logger.info("Database schema initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize database schema: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            release_db_connection(conn)
+def migrate_json_to_database():
+    """
+    Migrate data from JSON files to database on bot startup.
+    - Checks if users.json and balance.json exist
+    - Imports all data into database tables
+    - Renames files to .json.migrated to prevent re-import
+    - Logs migration completion with user/balance counts
+    - Handles migration errors gracefully
+    """
+    if not DATABASE_URL or db_pool is None:
+        logger.info("Skipping migration (DATABASE_URL not set or pool not initialized)")
+        return
+
+    users_file_exists = os.path.exists(USERS_FILE)
+    balance_file_exists = os.path.exists(BALANCE_FILE)
+
+    if not users_file_exists and not balance_file_exists:
+        logger.info("No JSON files to migrate")
+        return
+
+    logger.info("Starting data migration from JSON files to database...")
+
+    conn = None
+    users_migrated = 0
+    balances_migrated = 0
+    referrals_migrated = 0
+    withdrawals_migrated = 0
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Migrate users.json
+        if users_file_exists:
+            try:
+                with open(USERS_FILE, "r") as f:
+                    users_data = json.load(f)
+
+                logger.info(f"Migrating {len(users_data)} users from {USERS_FILE}...")
+
+                for user_id, user_info in users_data.items():
+                    try:
+                        # Parse joined timestamp if it exists
+                        joined = user_info.get("joined")
+                        if joined:
+                            # Try to parse the timestamp
+                            try:
+                                from datetime import datetime
+                                # Handle various date formats
+                                if len(joined) == 10:  # "2026-03-23"
+                                    joined_dt = datetime.strptime(joined, "%Y-%m-%d")
+                                elif len(joined) == 16:  # "2026-03-23 14:27"
+                                    joined_dt = datetime.strptime(joined, "%Y-%m-%d %H:%M")
+                                else:
+                                    joined_dt = None
+                            except:
+                                joined_dt = None
+                        else:
+                            joined_dt = None
+
+                        cursor.execute("""
+                            INSERT INTO users (user_id, name, username, joined, verified)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (user_id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                username = EXCLUDED.username,
+                                joined = EXCLUDED.joined,
+                                verified = EXCLUDED.verified
+                        """, (
+                            user_id,
+                            user_info.get("name", "Unknown"),
+                            user_info.get("username"),
+                            joined_dt,
+                            user_info.get("verified", False)
+                        ))
+                        users_migrated += 1
+                    except Exception as e:
+                        logger.error(f"Failed to migrate user {user_id}: {e}")
+                        continue
+
+                logger.info(f"Successfully migrated {users_migrated} users")
+
+            except Exception as e:
+                logger.error(f"Failed to read {USERS_FILE}: {e}")
+
+        # Migrate balance.json
+        if balance_file_exists:
+            try:
+                with open(BALANCE_FILE, "r") as f:
+                    balance_data = json.load(f)
+
+                users_balance = balance_data.get("users", {})
+                logger.info(f"Migrating {len(users_balance)} balance records from {BALANCE_FILE}...")
+
+                for user_id, balance_info in users_balance.items():
+                    try:
+                        # Migrate balance
+                        last_withdrawal = balance_info.get("last_withdrawal")
+                        if last_withdrawal:
+                            try:
+                                from datetime import datetime
+                                last_withdrawal_dt = datetime.strptime(last_withdrawal, "%Y-%m-%d").date()
+                            except:
+                                last_withdrawal_dt = None
+                        else:
+                            last_withdrawal_dt = None
+
+                        cursor.execute("""
+                            INSERT INTO balances (user_id, balance, last_withdrawal)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (user_id) DO UPDATE SET
+                                balance = EXCLUDED.balance,
+                                last_withdrawal = EXCLUDED.last_withdrawal
+                        """, (
+                            user_id,
+                            balance_info.get("balance", 0),
+                            last_withdrawal_dt
+                        ))
+                        balances_migrated += 1
+
+                        # Migrate referrals
+                        referrals = balance_info.get("referrals", [])
+                        for referred_id in referrals:
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO referrals (referrer_id, referred_id)
+                                    VALUES (%s, %s)
+                                    ON CONFLICT (referrer_id, referred_id) DO NOTHING
+                                """, (user_id, referred_id))
+                                referrals_migrated += 1
+                            except Exception as e:
+                                logger.error(f"Failed to migrate referral {user_id} -> {referred_id}: {e}")
+                                continue
+
+                        # Migrate withdrawals
+                        withdrawals = balance_info.get("withdrawals", [])
+                        for withdrawal in withdrawals:
+                            try:
+                                withdrawal_date = withdrawal.get("date")
+                                if withdrawal_date:
+                                    try:
+                                        from datetime import datetime
+                                        if len(withdrawal_date) == 10:  # "2026-03-27"
+                                            withdrawal_dt = datetime.strptime(withdrawal_date, "%Y-%m-%d")
+                                        elif len(withdrawal_date) == 16:  # "2026-03-27 11:39"
+                                            withdrawal_dt = datetime.strptime(withdrawal_date, "%Y-%m-%d %H:%M")
+                                        else:
+                                            withdrawal_dt = None
+                                    except:
+                                        withdrawal_dt = None
+                                else:
+                                    withdrawal_dt = None
+
+                                cursor.execute("""
+                                    INSERT INTO withdrawals (user_id, amount, date)
+                                    VALUES (%s, %s, %s)
+                                """, (
+                                    user_id,
+                                    withdrawal.get("amount", 0),
+                                    withdrawal_dt
+                                ))
+                                withdrawals_migrated += 1
+                            except Exception as e:
+                                logger.error(f"Failed to migrate withdrawal for user {user_id}: {e}")
+                                continue
+
+                    except Exception as e:
+                        logger.error(f"Failed to migrate balance for user {user_id}: {e}")
+                        continue
+
+                logger.info(f"Successfully migrated {balances_migrated} balances, {referrals_migrated} referrals, {withdrawals_migrated} withdrawals")
+
+            except Exception as e:
+                logger.error(f"Failed to read {BALANCE_FILE}: {e}")
+
+        # Commit all changes
+        conn.commit()
+
+        # Rename files to .migrated
+        if users_file_exists:
+            try:
+                os.rename(USERS_FILE, f"{USERS_FILE}.migrated")
+                logger.info(f"Renamed {USERS_FILE} to {USERS_FILE}.migrated")
+            except Exception as e:
+                logger.error(f"Failed to rename {USERS_FILE}: {e}")
+
+        if balance_file_exists:
+            try:
+                os.rename(BALANCE_FILE, f"{BALANCE_FILE}.migrated")
+                logger.info(f"Renamed {BALANCE_FILE} to {BALANCE_FILE}.migrated")
+            except Exception as e:
+                logger.error(f"Failed to rename {BALANCE_FILE}: {e}")
+
+        logger.info(f"Migration completed successfully: {users_migrated} users, {balances_migrated} balances, {referrals_migrated} referrals, {withdrawals_migrated} withdrawals")
+
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        if conn:
+            conn.rollback()
+        # Don't raise - allow bot to continue even if migration fails
+        logger.warning("Bot will continue with current database state")
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
 
 # ──────────────────────────────────────────────
 #  USER STORAGE (with verified flag)
 # ──────────────────────────────────────────────
 def load_users() -> dict:
+    """Load all users from database, returning same dict structure as file-based version."""
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        try:
+            with open(USERS_FILE, "r") as f:
+                data = json.load(f)
+            # Migrate from old list format
+            if isinstance(data, list):
+                migrated = {}
+                for uid in data:
+                    migrated[str(uid)] = {"name": "Unknown", "username": None, "joined": None, "verified": False}
+                with open(USERS_FILE, "w") as f:
+                    json.dump(migrated, f, indent=2)
+                return migrated
+            # Ensure all users have "verified" field
+            for uid, info in data.items():
+                if "verified" not in info:
+                    info["verified"] = False
+            return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+    
+    conn = None
     try:
-        with open(USERS_FILE, "r") as f:
-            data = json.load(f)
-        # Migrate from old list format
-        if isinstance(data, list):
-            migrated = {}
-            for uid in data:
-                migrated[str(uid)] = {"name": "Unknown", "username": None, "joined": None, "verified": False}
-            with open(USERS_FILE, "w") as f:
-                json.dump(migrated, f, indent=2)
-            return migrated
-        # Ensure all users have "verified" field
-        for uid, info in data.items():
-            if "verified" not in info:
-                info["verified"] = False
-        return data
-    except (FileNotFoundError, json.JSONDecodeError):
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT user_id, name, username, joined, verified FROM users")
+        rows = cursor.fetchall()
+        
+        # Convert to same dict structure as file-based version
+        users = {}
+        for row in rows:
+            users[row["user_id"]] = {
+                "name": row["name"],
+                "username": row["username"],
+                "joined": row["joined"].strftime("%Y-%m-%d %H:%M") if row["joined"] else None,
+                "verified": row["verified"] if row["verified"] is not None else False
+            }
+        return users
+    except Exception as e:
+        logger.error(f"Failed to load users from database: {e}")
         return {}
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def load_user_ids() -> set:
+    """Load all user IDs as a set."""
     users = load_users()
     return {int(uid) for uid in users.keys()}
 
 
-async def notify_admins_new_user(user):
-    if not ADMIN_IDS:
+async def notify_admins_new_user(user, context=None):
+    if not ADMIN_IDS or not context:
         return
     user_id = user.id
     name = user.full_name or "Unknown"
@@ -101,8 +491,8 @@ async def notify_admins_new_user(user):
             logger.warning(f"Failed to send new-user notification to admin {admin_id}: {e}")
 
 
-def save_user(user):
-    users = load_users()
+def save_user(user, context=None):
+    """Save or update a user in database, maintaining same logic as file-based version."""
     if hasattr(user, "id"):
         uid = str(user.id)
         name = user.full_name or "Unknown"
@@ -111,139 +501,539 @@ def save_user(user):
         uid = str(user)
         name = "Unknown"
         username = None
-
-    is_new = uid not in users
-    if is_new:
-        users[uid] = {
-            "name": name,
-            "username": username,
-            "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "verified": False
-        }
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f, indent=2)
-        logger.info(f"New user saved: {uid} - {name} (total: {len(users)})")
-        # Trigger admin notification (async)
-        asyncio.create_task(notify_admins_new_user(user))
-    elif users[uid]["name"] == "Unknown" and hasattr(user, "full_name"):
-        users[uid]["name"] = user.full_name or "Unknown"
-        users[uid]["username"] = user.username
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f, indent=2)
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        users = load_users()
+        is_new = uid not in users
+        if is_new:
+            users[uid] = {
+                "name": name,
+                "username": username,
+                "joined": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "verified": False
+            }
+            with open(USERS_FILE, "w") as f:
+                json.dump(users, f, indent=2)
+            logger.info(f"New user saved: {uid} - {name} (total: {len(users)})")
+            # Trigger admin notification (async) - only if event loop is running
+            try:
+                asyncio.create_task(notify_admins_new_user(user, bot_instance))
+            except RuntimeError:
+                # No event loop running (e.g., in tests)
+                pass
+        elif users[uid]["name"] == "Unknown" and hasattr(user, "full_name"):
+            users[uid]["name"] = user.full_name or "Unknown"
+            users[uid]["username"] = user.username
+            with open(USERS_FILE, "w") as f:
+                json.dump(users, f, indent=2)
+        return
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if user exists
+        cursor.execute("SELECT user_id, name FROM users WHERE user_id = %s", (uid,))
+        existing = cursor.fetchone()
+        
+        is_new = existing is None
+        
+        if is_new:
+            # Insert new user
+            cursor.execute("""
+                INSERT INTO users (user_id, name, username, joined, verified)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (uid, name, username, datetime.now(), False))
+            conn.commit()
+            
+            # Get total user count for logging
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total = cursor.fetchone()[0]
+            logger.info(f"New user saved: {uid} - {name} (total: {total})")
+            
+            # Trigger admin notification (async) - only if event loop is running
+            if hasattr(user, "id"):
+                try:
+                    asyncio.create_task(notify_admins_new_user(user, bot_instance))
+                except RuntimeError:
+                    # No event loop running (e.g., in tests)
+                    pass
+        elif existing[1] == "Unknown" and hasattr(user, "full_name") and name != "Unknown":
+            # Update existing user with better name/username
+            cursor.execute("""
+                UPDATE users SET name = %s, username = %s WHERE user_id = %s
+            """, (name, username, uid))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save user {uid}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def set_verified(user_id: int) -> bool:
-    users = load_users()
+    """Mark a user as verified in database, returning True if status changed."""
     uid = str(user_id)
-    if uid in users and not users[uid].get("verified", False):
-        users[uid]["verified"] = True
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f, indent=2)
-        return True
-    return False
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        users = load_users()
+        if uid in users and not users[uid].get("verified", False):
+            users[uid]["verified"] = True
+            with open(USERS_FILE, "w") as f:
+                json.dump(users, f, indent=2)
+            return True
+        return False
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check current verified status
+        cursor.execute("SELECT verified FROM users WHERE user_id = %s", (uid,))
+        row = cursor.fetchone()
+        
+        if row and not row[0]:
+            # Update to verified
+            cursor.execute("UPDATE users SET verified = TRUE WHERE user_id = %s", (uid,))
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to set verified for user {uid}: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def is_verified(user_id: int) -> bool:
-    users = load_users()
-    return users.get(str(user_id), {}).get("verified", False)
+    """Check if a user is verified in database."""
+    uid = str(user_id)
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        users = load_users()
+        return users.get(uid, {}).get("verified", False)
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT verified FROM users WHERE user_id = %s", (uid,))
+        row = cursor.fetchone()
+        return row[0] if row and row[0] is not None else False
+    except Exception as e:
+        logger.error(f"Failed to check verified status for user {uid}: {e}")
+        return False
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 # ──────────────────────────────────────────────
 #  BALANCE & REFERRAL SYSTEM
 # ──────────────────────────────────────────────
 def load_balance_data() -> dict:
+    """Load all balance data from database, returning same dict structure as file-based version."""
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        try:
+            with open(BALANCE_FILE, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {
+                "config": {"joining_bonus": 2, "referral_bonus": 3, "min_withdrawal": 30, "max_daily_withdrawals": 1},
+                "users": {}
+            }
+    
+    conn = None
     try:
-        with open(BALANCE_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Load config
+        cursor.execute("SELECT key, value FROM config")
+        config_rows = cursor.fetchall()
+        config = {
+            "joining_bonus": 2,
+            "referral_bonus": 3,
+            "min_withdrawal": 30,
+            "max_daily_withdrawals": 1
+        }
+        for row in config_rows:
+            key = row["key"]
+            value = row["value"]
+            if key in config:
+                config[key] = int(value) if value.isdigit() else float(value) if '.' in value else value
+        
+        # Load balances
+        cursor.execute("SELECT user_id, balance, last_withdrawal FROM balances")
+        balance_rows = cursor.fetchall()
+        
+        # Load referrals
+        cursor.execute("SELECT referrer_id, referred_id FROM referrals ORDER BY referrer_id, created_at")
+        referral_rows = cursor.fetchall()
+        
+        # Load withdrawals
+        cursor.execute("SELECT user_id, amount, date FROM withdrawals ORDER BY user_id, date")
+        withdrawal_rows = cursor.fetchall()
+        
+        # Build users dict
+        users = {}
+        for row in balance_rows:
+            uid = row["user_id"]
+            users[uid] = {
+                "balance": row["balance"] if row["balance"] is not None else 0,
+                "referrals": [],
+                "withdrawals": [],
+                "last_withdrawal": row["last_withdrawal"].strftime("%Y-%m-%d") if row["last_withdrawal"] else None
+            }
+        
+        # Add referrals
+        for row in referral_rows:
+            referrer_id = row["referrer_id"]
+            referred_id = row["referred_id"]
+            if referrer_id not in users:
+                users[referrer_id] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+            users[referrer_id]["referrals"].append(referred_id)
+        
+        # Add withdrawals
+        for row in withdrawal_rows:
+            uid = row["user_id"]
+            if uid not in users:
+                users[uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+            users[uid]["withdrawals"].append({
+                "amount": row["amount"],
+                "date": row["date"].strftime("%Y-%m-%d %H:%M") if row["date"] else None
+            })
+        
+        return {"config": config, "users": users}
+    except Exception as e:
+        logger.error(f"Failed to load balance data from database: {e}")
         return {
             "config": {"joining_bonus": 2, "referral_bonus": 3, "min_withdrawal": 30, "max_daily_withdrawals": 1},
             "users": {}
         }
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def save_balance_data(data: dict) -> None:
-    with open(BALANCE_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    """Save balance data to database (deprecated - use specific functions instead)."""
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        with open(BALANCE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        return
+    
+    # This function is deprecated in favor of specific update functions
+    # but kept for backward compatibility
+    logger.warning("save_balance_data() called - this is deprecated, use specific functions instead")
 
 
 def get_user_balance(user_id: str) -> dict:
-    data = load_balance_data()
+    """Get user balance data from database, returning same dict structure as file-based version."""
     uid = str(user_id)
-    if uid not in data["users"]:
-        data["users"][uid] = {
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        if uid not in data["users"]:
+            data["users"][uid] = {
+                "balance": 0,
+                "referrals": [],
+                "withdrawals": [],
+                "last_withdrawal": None
+            }
+            save_balance_data(data)
+        return data["users"][uid]
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get or create balance record
+        cursor.execute("SELECT balance, last_withdrawal FROM balances WHERE user_id = %s", (uid,))
+        balance_row = cursor.fetchone()
+        
+        if not balance_row:
+            # Create balance record
+            cursor.execute("INSERT INTO balances (user_id, balance) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (uid,))
+            conn.commit()
+            balance = 0
+            last_withdrawal = None
+        else:
+            balance = balance_row["balance"] if balance_row["balance"] is not None else 0
+            last_withdrawal = balance_row["last_withdrawal"].strftime("%Y-%m-%d") if balance_row["last_withdrawal"] else None
+        
+        # Get referrals
+        cursor.execute("SELECT referred_id FROM referrals WHERE referrer_id = %s ORDER BY created_at", (uid,))
+        referral_rows = cursor.fetchall()
+        referrals = [row["referred_id"] for row in referral_rows]
+        
+        # Get withdrawals
+        cursor.execute("SELECT amount, date FROM withdrawals WHERE user_id = %s ORDER BY date", (uid,))
+        withdrawal_rows = cursor.fetchall()
+        withdrawals = [
+            {
+                "amount": row["amount"],
+                "date": row["date"].strftime("%Y-%m-%d %H:%M") if row["date"] else None
+            }
+            for row in withdrawal_rows
+        ]
+        
+        return {
+            "balance": balance,
+            "referrals": referrals,
+            "withdrawals": withdrawals,
+            "last_withdrawal": last_withdrawal
+        }
+    except Exception as e:
+        logger.error(f"Failed to get user balance for {uid}: {e}")
+        return {
             "balance": 0,
             "referrals": [],
             "withdrawals": [],
             "last_withdrawal": None
         }
-        save_balance_data(data)
-    return data["users"][uid]
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def add_balance(user_id: str, amount: float, reason: str = "bonus") -> None:
-    data = load_balance_data()
+    """Add balance to user in database."""
     uid = str(user_id)
-    if uid not in data["users"]:
-        data["users"][uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
-    data["users"][uid]["balance"] = data["users"][uid].get("balance", 0) + amount
-    logger.info(f"Added ₹{amount} to user {uid} ({reason})")
-    save_balance_data(data)
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        if uid not in data["users"]:
+            data["users"][uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+        data["users"][uid]["balance"] = data["users"][uid].get("balance", 0) + amount
+        logger.info(f"Added ₹{amount} to user {uid} ({reason})")
+        save_balance_data(data)
+        return
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Insert or update balance
+        cursor.execute("""
+            INSERT INTO balances (user_id, balance)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET balance = balances.balance + %s
+        """, (uid, amount, amount))
+        conn.commit()
+        logger.info(f"Added ₹{amount} to user {uid} ({reason})")
+    except Exception as e:
+        logger.error(f"Failed to add balance for user {uid}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def subtract_balance(user_id: str, amount: float) -> bool:
-    data = load_balance_data()
+    """Subtract balance from user in database with transaction."""
     uid = str(user_id)
-    if uid not in data["users"]:
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        if uid not in data["users"]:
+            return False
+        if data["users"][uid].get("balance", 0) >= amount:
+            data["users"][uid]["balance"] -= amount
+            save_balance_data(data)
+            return True
         return False
-    if data["users"][uid].get("balance", 0) >= amount:
-        data["users"][uid]["balance"] -= amount
-        save_balance_data(data)
-        return True
-    return False
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check current balance
+        cursor.execute("SELECT balance FROM balances WHERE user_id = %s", (uid,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return False
+        
+        current_balance = row[0] if row[0] is not None else 0
+        if current_balance >= amount:
+            # Subtract balance
+            cursor.execute("UPDATE balances SET balance = balance - %s WHERE user_id = %s", (amount, uid))
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to subtract balance for user {uid}: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def add_referral(referrer_id: str, referred_id: str) -> None:
-    data = load_balance_data()
+    """Add referral relationship and bonus to database."""
     referrer_uid = str(referrer_id)
     referred_uid = str(referred_id)
-    if referrer_uid not in data["users"]:
-        data["users"][referrer_uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
-    if referred_uid not in data["users"][referrer_uid]["referrals"]:
-        data["users"][referrer_uid]["referrals"].append(referred_uid)
-        bonus = data["config"]["referral_bonus"]
-        data["users"][referrer_uid]["balance"] = data["users"][referrer_uid].get("balance", 0) + bonus
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        if referrer_uid not in data["users"]:
+            data["users"][referrer_uid] = {"balance": 0, "referrals": [], "withdrawals": [], "last_withdrawal": None}
+        if referred_uid not in data["users"][referrer_uid]["referrals"]:
+            data["users"][referrer_uid]["referrals"].append(referred_uid)
+            bonus = data["config"]["referral_bonus"]
+            data["users"][referrer_uid]["balance"] = data["users"][referrer_uid].get("balance", 0) + bonus
+            logger.info(f"Referral registered: {referrer_uid} → {referred_uid}, bonus ₹{bonus}")
+            save_balance_data(data)
+        return
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get referral bonus from config
+        cursor.execute("SELECT value FROM config WHERE key = 'referral_bonus'")
+        row = cursor.fetchone()
+        bonus = int(row[0]) if row else 3
+        
+        # Check if referral already exists
+        cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (referrer_uid, referred_uid))
+        if cursor.fetchone():
+            # Referral already exists
+            return
+        
+        # Insert referral
+        cursor.execute("""
+            INSERT INTO referrals (referrer_id, referred_id)
+            VALUES (%s, %s)
+            ON CONFLICT (referrer_id, referred_id) DO NOTHING
+        """, (referrer_uid, referred_uid))
+        
+        # Add bonus to referrer
+        cursor.execute("""
+            INSERT INTO balances (user_id, balance)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET balance = balances.balance + %s
+        """, (referrer_uid, bonus, bonus))
+        
+        conn.commit()
         logger.info(f"Referral registered: {referrer_uid} → {referred_uid}, bonus ₹{bonus}")
-        save_balance_data(data)
+    except Exception as e:
+        logger.error(f"Failed to add referral {referrer_uid} → {referred_uid}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def can_withdraw(user_id: str) -> bool:
-    data = load_balance_data()
+    """Check if user can withdraw from database."""
     uid = str(user_id)
-    user_data = data["users"].get(uid)
-    if not user_data:
-        return False
-    last_withdraw = user_data.get("last_withdrawal")
-    if not last_withdraw:
-        return True
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        user_data = data["users"].get(uid)
+        if not user_data:
+            return False
+        last_withdraw = user_data.get("last_withdrawal")
+        if not last_withdraw:
+            return True
+        try:
+            last_date = datetime.strptime(last_withdraw, "%Y-%m-%d").date()
+            today = datetime.now().date()
+            return last_date < today
+        except:
+            return True
+    
+    conn = None
     try:
-        last_date = datetime.strptime(last_withdraw, "%Y-%m-%d").date()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT last_withdrawal FROM balances WHERE user_id = %s", (uid,))
+        row = cursor.fetchone()
+        
+        if not row or not row[0]:
+            return True
+        
+        last_date = row[0]
         today = datetime.now().date()
         return last_date < today
-    except:
+    except Exception as e:
+        logger.error(f"Failed to check withdrawal status for user {uid}: {e}")
         return True
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 def record_withdrawal(user_id: str, amount: float) -> None:
-    data = load_balance_data()
+    """Record withdrawal in database."""
     uid = str(user_id)
-    if uid in data["users"]:
-        data["users"][uid]["withdrawals"].append({
-            "amount": amount,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-        })
-        data["users"][uid]["last_withdrawal"] = datetime.now().strftime("%Y-%m-%d")
-        save_balance_data(data)
+    
+    if not DATABASE_URL or db_pool is None:
+        # Fallback to file-based storage if database not available
+        data = load_balance_data()
+        if uid in data["users"]:
+            data["users"][uid]["withdrawals"].append({
+                "amount": amount,
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
+            data["users"][uid]["last_withdrawal"] = datetime.now().strftime("%Y-%m-%d")
+            save_balance_data(data)
+        return
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Insert withdrawal record
+        cursor.execute("""
+            INSERT INTO withdrawals (user_id, amount, date)
+            VALUES (%s, %s, %s)
+        """, (uid, amount, datetime.now()))
+        
+        # Update last_withdrawal date
+        cursor.execute("""
+            UPDATE balances SET last_withdrawal = %s WHERE user_id = %s
+        """, (datetime.now().date(), uid))
+        
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to record withdrawal for user {uid}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 
 # ──────────────────────────────────────────────
@@ -514,7 +1304,7 @@ async def verify_callback(update: Update, context):
 # ──────────────────────────────────────────────
 async def start(update: Update, context):
     user_id = update.effective_user.id
-    save_user(update.effective_user)
+    save_user(update.effective_user, context)
 
     # Referral handling
     if context.args:
@@ -889,26 +1679,31 @@ async def handle_button_press(update: Update, context):
     text = update.message.text
     user_id = update.effective_user.id
 
-    if text in ["✅ Verify Both Channels", "✅ Try Verifying Again"]:
-        await verify_callback(update, context)
-        return
-    if text in ["💰 Balance", "💰 Check Balance"]:
-        await balance_command(update, context)
-        return
-    if text in ["🔗 Referral Link", "🔗 Share Link", "🔗 Share Referral Link"]:
-        await referral_command(update, context)
-        return
-    if text == "👥 My Referrals":
-        await my_referrals_command(update, context)
-        return
-    if text in ["💸 Withdraw", "💸 Withdraw Money"]:
-        await withdraw_command(update, context)
-        return
-    if text in ["⚙️ Settings", "Settings"]:
-        await settings_command(update, context)
-        return
-    if text in ["📞 Help", "📞 Need Help?"]:
-        await help_command(update, context)
+    try:
+        if text in ["✅ Verify Both Channels", "✅ Try Verifying Again"]:
+            await verify_callback(update, context)
+            return
+        if text in ["💰 Balance", "💰 Check Balance"]:
+            await balance_command(update, context)
+            return
+        if text in ["🔗 Referral Link", "🔗 Share Link", "🔗 Share Referral Link"]:
+            await referral_command(update, context)
+            return
+        if text == "👥 My Referrals":
+            await my_referrals_command(update, context)
+            return
+        if text in ["💸 Withdraw", "💸 Withdraw Money"]:
+            await withdraw_command(update, context)
+            return
+        if text in ["⚙️ Settings", "Settings"]:
+            await settings_command(update, context)
+            return
+        if text in ["📞 Help", "📞 Need Help?"]:
+            await help_command(update, context)
+    except Forbidden:
+        logger.info(f"User {user_id} blocked the bot. Caught Forbidden exception.")
+    except Exception as e:
+        logger.error(f"Error handling button press for user {user_id}: {e}")
         return
     if text == "⚙️ Admin Panel":
         if user_id not in ADMIN_IDS:
@@ -974,10 +1769,22 @@ async def cancel_broadcast(update: Update, context):
 #  MAIN
 # ──────────────────────────────────────────────
 def main():
+    global bot_instance
+    
     if not TOKEN:
         raise ValueError("Set the BOT_TOKEN environment variable!")
 
+    # Initialize database
+    try:
+        init_db_pool()
+        init_db_schema()
+        migrate_json_to_database()
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        logger.warning("Bot will continue without database support")
+
     app = Application.builder().token(TOKEN).build()
+    bot_instance = app.bot
 
     # Broadcast conversation
     broadcast_handler = ConversationHandler(
