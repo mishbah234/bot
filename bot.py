@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 from telegram.error import Forbidden
-import psycopg2
+import pscopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import time
