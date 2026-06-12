@@ -21,9 +21,8 @@ import time
 TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 10000))
-DATABASE_URL = os.environ.get("DATABASE_URL")
-# Comma-separated admin Telegram IDs
-ADMIN_IDS = [
+DATABASE_URL = os.enviro
+A
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "8455891912,6097181868").split(",") if x.strip()
 ]
 
